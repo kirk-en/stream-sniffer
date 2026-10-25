@@ -122,6 +122,7 @@ async function startStream(source, slot, { retries = 0, lastReason = '', manual 
       : `Retry ${retries} of ${RETRY_DELAYS_S.length}: connecting… (it stopped because ${lastReason})`,
     recovered: '', // e.g. "back after 2 automatic retries (2:31:05 PM)"
     recoveredUntil: 0, // Date.now() until which that shows over the video
+    firstLevel: null, // the quality of the first segment loaded (see the start level)
     // Frame drops (see watchFrames): recent { at, dropped, missing }, totals, and the counts
     // the checks compare against.
     frameEvents: [],
@@ -157,6 +158,10 @@ async function startStream(source, slot, { retries = 0, lastReason = '', manual 
     // the browser's media memory until it has to evict mid-playback, which can hitch. Live
     // streams are never rewound that far, so keep a minute.
     backBufferLength: 60,
+    // Assume a good connection (10 Mbps) until the first downloads measure the real one, so the
+    // automatic quality doesn't start out cautious. See also the start level, set on
+    // MANIFEST_PARSED.
+    abrEwmaDefaultEstimate: 10e6,
   }));
   hls.on(Hls.Events.ERROR, (_e, data) => {
     const code = data.response?.code;
@@ -217,6 +222,7 @@ async function startStream(source, slot, { retries = 0, lastReason = '', manual 
   // own figure is only a claim, and a playlist linked directly has none.
   hls.on(Hls.Events.FRAG_LOADED, (_e, { frag, payload }) => {
     if (frag.type !== 'main' || !(frag.duration > 0)) return;
+    stream.firstLevel ??= frag.level;
     // payload is after any unwrapping (see makeLoader in shared.js), so a disguised segment
     // counts as video.
     stream.rates.push({ level: frag.level, bytes: payload?.byteLength || frag.stats.total, duration: frag.duration });
@@ -226,7 +232,10 @@ async function startStream(source, slot, { retries = 0, lastReason = '', manual 
   for (const e of [Hls.Events.MANIFEST_LOADED, Hls.Events.LEVEL_LOADED, Hls.Events.AUDIO_TRACK_LOADED, Hls.Events.SUBTITLE_TRACK_LOADED]) {
     hls.on(e, recovered('playlist'));
   }
-  hls.on(Hls.Events.MANIFEST_PARSED, () => {
+  hls.on(Hls.Events.MANIFEST_PARSED, (_e, { levels }) => {
+    // Start on the best quality, and let Auto drop down if the connection can't keep up, rather
+    // than starting low and working up.
+    if (levels.length > 1) hls.startLevel = levels.reduce((best, l, i) => (l.bitrate > levels[best].bitrate ? i : best), 0);
     stream.status = `Playing · ${res.mode}${stream.unwrapped ? ' · segments are disguised as images; decoding them' : ''}`;
     render();
     startPlayback(stream);

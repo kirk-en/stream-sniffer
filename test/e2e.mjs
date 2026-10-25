@@ -543,6 +543,8 @@ async function main() {
     await multi.type('input[name=referer]', EMBED + '/');
     await multi.click('button::-p-text(Play)');
     await waitForPlayback(multi, 'two-level stream', 0.5);
+    const firstHeight = await multi.evaluate(() => streams[0].hls.levels[streams[0].firstLevel]?.height);
+    assert(firstHeight === 720, `it starts on the best quality (first segment: ${firstHeight}p)`);
     const autoNote = await waitForText(multi, /(240|720)p, picked automatically from 2 quality levels/);
     ok(`status names the quality on screen: "${autoNote.slice(0, 160)}"`);
     await multi.click('::-p-aria(Settings)'); // close the menu, to see the bar

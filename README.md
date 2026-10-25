@@ -86,7 +86,8 @@ To update later, run `git pull`, then click the reload icon (↻) on the extensi
    to right: volume (**M** mutes), **LIVE** (grey when behind; click it to jump to live) or the
    time, what is on screen (resolution and frame rate, e.g. 1080p60, and the bitrate measured from
    the video it downloads), which opens a quality menu when the stream has more than one
-   (Auto follows your connection speed; a picked quality stays), **Pop out**, and full screen.
+   (Auto starts on the best quality and drops down only if your connection can't keep up; a
+   picked quality stays), **Pop out**, and full screen.
    **Pop out** moves the big video into a small floating window that stays on top of other
    apps; click it again (or close the floating window) to bring it back. Full screen (or **F**,
    or a double-click on the video) fills the screen with the whole player, small picture
