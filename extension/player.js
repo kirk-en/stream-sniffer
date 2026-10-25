@@ -1078,8 +1078,11 @@ async function init() {
     sources.push(await saveSource({ url: params.get('url'), referer: params.get('referer') || '', origin: params.get('origin') || '' }));
   }
   if (!sources.length) return openMenu(true);
-  const { playUrlOpen } = await chrome.storage.local.get('playUrlOpen');
-  playUrl.open = playUrlOpen !== false;
+  // Not awaited: the streams shouldn't wait on how a menu was left.
+  chrome.storage.local
+    .get('playUrlOpen')
+    .then(({ playUrlOpen }) => (playUrl.open = playUrlOpen !== false))
+    .catch((err) => failPage(`Couldn't read whether "Play a URL" was left open: ${err.message}`));
   for (const [i, source] of sources.entries()) await startStream(source, i);
 }
 init().catch((err) => {
