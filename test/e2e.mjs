@@ -528,6 +528,14 @@ async function main() {
     const manualTime = await waitForPlayback(manual, 'manual player');
     ok(`manual mode plays (t=${manualTime.toFixed(1)}s)`);
 
+    step('Frames missing from the stream show as a warning, and in the menu');
+    // A gap in the video's timeline, as countFrames records one when frames never arrive.
+    await manual.evaluate(() => (streams[0].gapFrames += 5));
+    const framesMsg = await waitForText(manual, /Frames in the last 10 s: .*\d+ missing from the stream itself/, 5000);
+    ok(`over the video: "${framesMsg.slice(0, 120)}"`);
+    const framesTotal = await waitForText(manual, /frames so far: \d+ dropped by this computer, \d+ missing from the stream/, 5000);
+    ok(`in the menu: "${framesTotal.match(/frames so far[^·]*/)[0]}"`);
+
     step('A stream with two quality levels says which one is on screen, and the menu can lock one');
     const multi = await browser.newPage();
     await multi.goto(`chrome-extension://${ext.id}/player.html`);

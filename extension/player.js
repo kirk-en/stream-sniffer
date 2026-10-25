@@ -122,6 +122,13 @@ async function startStream(source, slot, { retries = 0, lastReason = '', manual 
       : `Retry ${retries} of ${RETRY_DELAYS_S.length}: connecting… (it stopped because ${lastReason})`,
     recovered: '', // e.g. "back after 2 automatic retries (2:31:05 PM)"
     recoveredUntil: 0, // Date.now() until which that shows over the video
+    // Frame drops (see watchFrames): recent { at, dropped, missing }, totals, and the counts
+    // the checks compare against.
+    frameEvents: [],
+    droppedTotal: 0,
+    missingTotal: 0,
+    droppedSeen: null, // the video's dropped-frame count at the last check
+    gapFrames: 0, // frames skipped in the video's timeline since the last check (see countFrames)
   };
   streams[slot] = stream;
   pageError = '';
@@ -548,8 +555,18 @@ navigator.mediaSession.setActionHandler('play', () => {
 // so they lower it, as they should.
 function countFrames(v) {
   let from = null; // { s, mediaTime, frames }
+  let last = null; // the previous frame shown: { s, mediaTime, frames }
   const tick = (_now, meta) => {
     const s = streamOf(v);
+    // Gaps in the timeline: a frame shown later than the next one was due means the frames in
+    // between weren't shown. Some the computer dropped (the browser counts those); the rest were
+    // never in the stream (see watchFrames). Jumps of a second or more are seeks, not gaps.
+    if (s?.fps && last?.s === s) {
+      const elapsed = meta.mediaTime - last.mediaTime;
+      const notShown = Math.round(elapsed * s.fps) - (meta.presentedFrames - last.frames);
+      if (elapsed > 0 && elapsed < 1 && notShown > 0) s.gapFrames += notShown;
+    }
+    last = s && { s, mediaTime: meta.mediaTime, frames: meta.presentedFrames };
     if (!s || !from || from.s !== s || meta.mediaTime < from.mediaTime) {
       from = s && { s, mediaTime: meta.mediaTime, frames: meta.presentedFrames };
     } else if (meta.mediaTime - from.mediaTime >= 2) {
@@ -563,6 +580,89 @@ function countFrames(v) {
     v.requestVideoFrameCallback(tick);
   };
   v.requestVideoFrameCallback(tick);
+}
+
+// Every second, for each picture on screen: frames the computer dropped (decoded too late to
+// show, counted by the browser) and frames missing from the stream itself (timeline gaps the
+// computer didn't account for). The last 10 s of them show over the video; totals in the menu.
+const FRAME_WINDOW_MS = 10000;
+setInterval(() => {
+  let changed = false;
+  for (const s of streams) {
+    const shown = s.hls && !s.stopped && !document.hidden && !s.video.paused && !(s !== big() && smallHidden);
+    const dropped = s.video.getVideoPlaybackQuality().droppedVideoFrames;
+    const newDropped = shown && s.droppedSeen != null ? Math.max(0, dropped - s.droppedSeen) : 0;
+    s.droppedSeen = dropped;
+    const missing = shown ? Math.max(0, s.gapFrames - newDropped) : 0;
+    s.gapFrames = 0;
+    if (newDropped || missing) {
+      s.frameEvents.push({ at: Date.now(), dropped: newDropped, missing });
+      s.droppedTotal += newDropped;
+      s.missingTotal += missing;
+      changed = true;
+    }
+    const recent = s.frameEvents.filter((e) => Date.now() - e.at < FRAME_WINDOW_MS);
+    if (recent.length !== s.frameEvents.length) changed = true;
+    s.frameEvents = recent;
+  }
+  if (changed) render();
+}, 1000);
+
+function framesWarning(s) {
+  const dropped = s.frameEvents.reduce((n, e) => n + e.dropped, 0);
+  const missing = s.frameEvents.reduce((n, e) => n + e.missing, 0);
+  if (!dropped && !missing) return '';
+  const two = streams.length > 1 ? '; two streams are playing, which takes more decoding' : '';
+  const parts = [
+    dropped && `${dropped} dropped by this computer (it couldn't decode or draw them in time${two})`,
+    missing && `${missing} missing from the stream itself (the source skipped them)`,
+  ].filter(Boolean);
+  const cadence = cadenceNote(s);
+  return `Frames in the last 10 s: ${parts.join(' · ')}${cadence ? ` · Also: ${cadence}` : ''}`;
+}
+
+// The display's refresh rate, from the browser's own frame timing (the median gap over 2 s,
+// which a busy moment doesn't skew). Measured again when the window may have moved to another
+// screen.
+const COMMON_HZ = [24, 25, 30, 48, 50, 60, 72, 75, 90, 100, 120, 144, 165, 240];
+let displayHz = 0;
+let measuringHz = false;
+function measureHz() {
+  if (document.hidden || measuringHz) return;
+  measuringHz = true;
+  const gaps = [];
+  let prev = null;
+  const step = (t) => {
+    if (prev != null) gaps.push(t - prev);
+    prev = t;
+    if (gaps.length < 120) return requestAnimationFrame(step);
+    measuringHz = false;
+    const median = gaps.sort((a, b) => a - b)[gaps.length >> 1];
+    const hz = 1000 / median;
+    const closest = COMMON_HZ.reduce((a, b) => (Math.abs(b - hz) < Math.abs(a - hz) ? b : a));
+    displayHz = Math.abs(closest - hz) <= 2 ? closest : Math.round(hz);
+    render();
+  };
+  requestAnimationFrame(step);
+}
+measureHz();
+let hzTimer;
+const remeasureHz = () => {
+  clearTimeout(hzTimer);
+  hzTimer = setTimeout(measureHz, 1000);
+};
+addEventListener('resize', remeasureHz);
+document.addEventListener('fullscreenchange', remeasureHz);
+document.addEventListener('visibilitychange', remeasureHz);
+
+// A frame rate that doesn't divide the display's refresh rate can't be shown evenly: some
+// frames stay up longer than others (50 fps on 60 Hz: every fifth frame twice as long). That
+// steady hitch isn't dropped frames, and a display set to a matching rate fixes it.
+function cadenceNote(s) {
+  const fps = s.fps;
+  if (!fps || !displayHz || fps > displayHz || displayHz % fps === 0) return '';
+  const match = fps >= 48 ? fps : fps * 2;
+  return `${fps} fps video on a ${displayHz} Hz display shows some frames longer than others, a slight steady hitch; setting the display to ${match} Hz fixes it`;
 }
 
 // Over the recent segments of the quality on screen (any quality until one is on screen).
@@ -660,6 +760,8 @@ function render() {
     if (s.error) line('error', label(s) + s.error, { retryId: s.stopped ? s.id : null, ...(s.retryTimer && { key: `countdown:${s.id}` }) });
     if (health(s)) line('warn', label(s) + health(s));
     if (s.recovered && Date.now() < s.recoveredUntil) line('ok', label(s) + s.recovered[0].toUpperCase() + s.recovered.slice(1));
+    // One key while drops go on, so dismissing it keeps it hidden until they stop for 10 s.
+    if (framesWarning(s)) line('warn', label(s) + framesWarning(s), { key: `frames:${s.id}` });
   }
   // Forgetting dismissed messages that are gone keeps the set small.
   const keys = new Set(lines.map((l) => l.key));
@@ -696,6 +798,9 @@ function render() {
       qualityText(s),
       s.skipped && `hls.js skipped ${s.skipped} playlist problem${s.skipped === 1 ? '' : 's'} (last ${s.lastSkipped})`,
       s.resumes && `resumed after ${s.resumes} pause${s.resumes === 1 ? '' : 's'} (last ${s.lastResume})`,
+      (s.droppedTotal || s.missingTotal) &&
+        `frames so far: ${s.droppedTotal} dropped by this computer, ${s.missingTotal} missing from the stream`,
+      cadenceNote(s),
       ignoredPauses && `ignored ${ignoredPauses} pause request${ignoredPauses === 1 ? '' : 's'} from Chrome's media controls (last ${lastIgnoredPause})`,
     ]
       .filter(Boolean)

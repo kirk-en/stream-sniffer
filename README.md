@@ -77,7 +77,11 @@ To update later, run `git pull`, then click the reload icon (↻) on the extensi
    says when it's back. A stopped stream also has a **Retry** button. A link the server refuses
    (403, 404) isn't retried by itself: it has most likely expired, so reopen it from its page.
    Live streams just play: if a video pauses (a media key, or Chrome itself), the player
-   starts it again at once and notes it in the ⚙ menu.
+   starts it again at once and notes it in the ⚙ menu. If frames are lost, a warning says how
+   many in the last 10 seconds and whether this computer dropped them (it couldn't decode or
+   draw them in time) or the stream itself was missing them; the ⚙ menu keeps the totals. The
+   menu also notes a frame rate that doesn't fit the display's refresh rate (e.g. 50 fps on
+   60 Hz), which shows a slight steady hitch; setting the display to a matching rate fixes it.
 5. The bar at the bottom controls the big picture. It fades out when the mouse rests. From left
    to right: volume (**M** mutes), **LIVE** (grey when behind; click it to jump to live) or the
    time, what is on screen (resolution and frame rate, e.g. 1080p60, and the bitrate measured from
