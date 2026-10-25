@@ -535,6 +535,13 @@ async function main() {
     ok(`over the video: "${framesMsg.slice(0, 120)}"`);
     const framesTotal = await waitForText(manual, /frames so far: \d+ dropped by this computer, \d+ missing from the stream/, 5000);
     ok(`in the menu: "${framesTotal.match(/frames so far[^·]*/)[0]}"`);
+    const framesShowing = () => manual.$eval('#problems', (e) => /Frames in the last 10 s/.test(e.textContent));
+    await manual.click('#frame-warnings'); // the menu's switch: off
+    await manual.waitForFunction(() => !/Frames in the last 10 s/.test(document.getElementById('problems').textContent), { timeout: 3000 });
+    ok('the menu switch turns the warning off');
+    await manual.click('#frame-warnings'); // and back on
+    await manual.waitForFunction(() => /Frames in the last 10 s/.test(document.getElementById('problems').textContent), { timeout: 3000 });
+    assert(await framesShowing(), 'and on again');
 
     step('A stream with two quality levels says which one is on screen, and the menu can lock one');
     const multi = await browser.newPage();

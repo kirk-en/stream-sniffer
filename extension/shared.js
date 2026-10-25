@@ -85,5 +85,5 @@
     return mbps >= 1 ? `${mbps.toFixed(1)} Mbps` : `${Math.round(mbps * 1000)} kbps`;
   }
 
-  globalThis.StreamSnifferShared = { allowHost, makeLoader, snapFps, rateText };
+  globalThis.StreamSnifferShared = { allowHost, makeLoader, snapFps, rateText, COMMON_FPS };
 })();

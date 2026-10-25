@@ -20,7 +20,7 @@ let pageError = ''; // a problem that isn't about one stream
 const big = () => streams[0];
 const streamOf = (video) => streams.find((s) => s.video === video);
 
-const { makeLoader, snapFps, rateText } = StreamSnifferShared;
+const { makeLoader, snapFps, rateText, COMMON_FPS } = StreamSnifferShared;
 
 // Registers a host for this stream's Referer/Origin before its first request there (see shared.js).
 const allowHost = (stream, url) => StreamSnifferShared.allowHost(stream.id, stream.hosts, url);
@@ -559,12 +559,12 @@ navigator.mediaSession.setActionHandler('play', () => {
   }
 });
 
-// Frame rate, counted as frames are shown: frames per second of video over each 2 s stretch,
-// snapped to the usual rates. Frames dropped because the computer can't keep up aren't shown,
-// so they lower it, as they should.
+// The stream's frame rate, from the spacing of its frames: the typical (median) gap in video
+// time between frames shown one after another, over 60 of them, snapped to the usual rates.
+// Lost frames leave bigger gaps, which the median ignores, so they don't lower it.
 function countFrames(v) {
-  let from = null; // { s, mediaTime, frames }
   let last = null; // the previous frame shown: { s, mediaTime, frames }
+  let gaps = []; // seconds of video between consecutive frames shown
   const tick = (_now, meta) => {
     const s = streamOf(v);
     // Gaps in the timeline: a frame shown later than the next one was due means the frames in
@@ -575,16 +575,20 @@ function countFrames(v) {
       const notShown = Math.round(elapsed * s.fps) - (meta.presentedFrames - last.frames);
       if (elapsed > 0 && elapsed < 1 && notShown > 0) s.gapFrames += notShown;
     }
+    if (s && last?.s === s && meta.presentedFrames - last.frames === 1) {
+      const gap = meta.mediaTime - last.mediaTime;
+      if (gap > 0 && gap < 0.2) gaps.push(gap);
+    } else if (last?.s !== s) {
+      gaps = [];
+    }
     last = s && { s, mediaTime: meta.mediaTime, frames: meta.presentedFrames };
-    if (!s || !from || from.s !== s || meta.mediaTime < from.mediaTime) {
-      from = s && { s, mediaTime: meta.mediaTime, frames: meta.presentedFrames };
-    } else if (meta.mediaTime - from.mediaTime >= 2) {
-      const fps = snapFps((meta.presentedFrames - from.frames) / (meta.mediaTime - from.mediaTime));
+    if (gaps.length >= 60) {
+      const fps = snapFps(1 / gaps.sort((a, b) => a - b)[gaps.length >> 1]);
+      gaps = [];
       if (s.fps !== fps) {
         s.fps = fps;
         if (s === big()) renderBar();
       }
-      from = { s, mediaTime: meta.mediaTime, frames: meta.presentedFrames };
     }
     v.requestVideoFrameCallback(tick);
   };
@@ -618,6 +622,7 @@ setInterval(() => {
 }, 1000);
 
 function framesWarning(s) {
+  if (!frameWarnings) return '';
   const dropped = s.frameEvents.reduce((n, e) => n + e.dropped, 0);
   const missing = s.frameEvents.reduce((n, e) => n + e.missing, 0);
   if (!dropped && !missing) return '';
@@ -627,7 +632,7 @@ function framesWarning(s) {
     missing && `${missing} missing from the stream itself (the source skipped them)`,
   ].filter(Boolean);
   const cadence = cadenceNote(s);
-  return `Frames in the last 10 s: ${parts.join(' · ')}${cadence ? ` · Also: ${cadence}` : ''}`;
+  return `Frames in the last 10 s: ${parts.join(' · ')}${cadence ? ` · ${cadence}` : ''}`;
 }
 
 // The display's refresh rate, from the browser's own frame timing (the median gap over 2 s,
@@ -666,13 +671,31 @@ document.addEventListener('visibilitychange', remeasureHz);
 
 // A frame rate that doesn't divide the display's refresh rate can't be shown evenly: some
 // frames stay up longer than others (50 fps on 60 Hz: every fifth frame twice as long). That
-// steady hitch isn't dropped frames, and a display set to a matching rate fixes it.
+// steady hitch isn't dropped frames. Only said for the usual rates, which are measured reliably.
 function cadenceNote(s) {
   const fps = s.fps;
-  if (!fps || !displayHz || fps > displayHz || displayHz % fps === 0) return '';
-  const match = fps >= 48 ? fps : fps * 2;
-  return `${fps} fps video on a ${displayHz} Hz display shows some frames longer than others, a slight steady hitch; setting the display to ${match} Hz fixes it`;
+  if (!frameWarnings || !COMMON_FPS.includes(fps) || !COMMON_HZ.includes(displayHz)) return '';
+  if (fps > displayHz || displayHz % fps === 0) return '';
+  return `${fps} fps on a ${displayHz} Hz screen: a slight steady hitch, not lost frames`;
 }
+
+// The menu's switch for the warnings above (lost frames, refresh-rate hitches). The counting
+// goes on either way; the totals stay in the menu.
+let frameWarnings = true;
+const frameWarningsBox = document.getElementById('frame-warnings');
+chrome.storage.local
+  .get('frameWarnings')
+  .then(({ frameWarnings: saved }) => {
+    frameWarnings = saved !== false;
+    frameWarningsBox.checked = frameWarnings;
+    render();
+  })
+  .catch((err) => failPage(`Couldn't read whether frame warnings are on: ${err.message}`));
+frameWarningsBox.addEventListener('change', () => {
+  frameWarnings = frameWarningsBox.checked;
+  render();
+  chrome.storage.local.set({ frameWarnings }).catch((err) => failPage(`Couldn't save whether frame warnings are on: ${err.message}`));
+});
 
 // Over the recent segments of the quality on screen (any quality until one is on screen).
 function measuredMbps(s) {
