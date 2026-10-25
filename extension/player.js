@@ -662,7 +662,9 @@ function skipReason(s) {
   if (s.uneven >= UNEVEN) {
     return `the stream's frame timing is uneven, ${Math.round(s.uneven * 100)}% of frames off their beat, so some land late; that's the stream, not your computer`;
   }
-  if (s.hardware === false) return 'late for their slot; this format has no hardware decoding here, so the processor decodes it';
+  // Chrome doesn't say which; whether the format has hardware decoding is the best clue.
+  if (s.hardware === false) return 'this format has no hardware decoding here, so the processor decodes it and may not keep up';
+  if (s.hardware === true) return 'late for their slot; not decoding speed, this format is decoded in hardware';
   return `late for their slot, or decoding couldn't keep up${streams.length > 1 ? '; two streams are playing' : ''}`;
 }
 
