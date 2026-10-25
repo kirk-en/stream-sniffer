@@ -32,22 +32,27 @@ function assert(cond, msg) {
   ok(msg);
 }
 
+// The test video, and a 1280x720 copy (hi/) for the stream with two quality levels.
 function ensureStream() {
-  if (fs.existsSync(path.join(streamDir, 'index.m3u8'))) return;
-  step('Generating test HLS stream with ffmpeg');
-  fs.mkdirSync(streamDir, { recursive: true });
+  makeStream(streamDir, '320x240');
+  makeStream(path.join(streamDir, 'hi'), '1280x720');
+}
+function makeStream(dir, size) {
+  if (fs.existsSync(path.join(dir, 'index.m3u8'))) return;
+  step(`Generating ${size} test HLS stream with ffmpeg`);
+  fs.mkdirSync(dir, { recursive: true });
   const r = spawnSync(
     'ffmpeg',
     [
       '-y', '-loglevel', 'error',
-      '-f', 'lavfi', '-i', 'testsrc=size=320x240:rate=25',
+      '-f', 'lavfi', '-i', `testsrc=size=${size}:rate=25`,
       '-f', 'lavfi', '-i', 'sine=frequency=440',
       '-t', '20',
       '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-g', '50',
       '-c:a', 'aac',
       '-f', 'hls', '-hls_time', '2', '-hls_playlist_type', 'vod',
-      '-hls_segment_filename', path.join(streamDir, 'seg%d.ts'),
-      path.join(streamDir, 'index.m3u8'),
+      '-hls_segment_filename', path.join(dir, 'seg%d.ts'),
+      path.join(dir, 'index.m3u8'),
     ],
     { stdio: 'inherit' }
   );
@@ -232,12 +237,23 @@ async function main() {
     await player.click('::-p-aria(Settings)');
     await player.waitForSelector('input[name=url]', { visible: true, timeout: 5000 });
     ok('settings menu shows the stream form');
+    await player.click('#play-url summary');
+    // Puppeteer's { hidden: true } doesn't see inside a closed <details>; checkVisibility does.
+    await player.waitForFunction(() => !document.querySelector('input[name=url]').checkVisibility(), { timeout: 5000 });
+    ok('"Play a URL" folds away');
+    await player.reload();
+    await waitForPlayback(player, 'extension player after a reload', 0.5);
+    await player.click('::-p-aria(Settings)');
+    assert(await player.$eval('#play-url', (d) => !d.open), '"Play a URL" is still folded after a reload');
+    await player.click('#play-url summary');
+    await player.waitForSelector('input[name=url]', { visible: true, timeout: 5000 });
+    ok('and opens again with a click');
 
     step('"Pop out" puts the video in a floating picture-in-picture window, and can bring it back');
-    await player.click('button::-p-text(Pop out)');
+    await player.click('::-p-aria(Pop out)');
     await player.waitForFunction(() => document.pictureInPictureElement?.tagName === 'VIDEO', { timeout: 5000 });
     ok('video is in picture-in-picture');
-    await player.click('button::-p-text(Back to tab)');
+    await player.click('::-p-aria(Back to tab)');
     await player.waitForFunction(() => !document.pictureInPictureElement, { timeout: 5000 });
     ok('video is back in the tab');
     await player.click('::-p-aria(Settings)'); // close the menu
@@ -324,6 +340,25 @@ async function main() {
     );
     assert(servers.rejected.length === 0, `both CDNs still accepted every request (${JSON.stringify(servers.rejected)})`);
     await player.screenshot({ path: path.join(artifactsDir, 'player-two-streams.png') });
+
+    const resLabel = await player.$eval('#resolution', (e) => e.textContent);
+    assert(resLabel === '240p', `the label above the playback bar shows the big picture's resolution ("${resLabel}")`);
+    const bothShowing = () => player.$$eval('video', (vs) => vs.filter((v) => !v.hidden && v.checkVisibility()).length === 2);
+    await player.click('::-p-aria(Full screen)');
+    await player.waitForFunction(() => document.fullscreenElement === document.documentElement, { timeout: 5000 });
+    assert(await bothShowing(), 'the full-screen button fills the screen with the whole player, so the small picture stays');
+    await player.keyboard.press('f');
+    await player.waitForFunction(() => !document.fullscreenElement, { timeout: 5000 });
+    ok('F leaves full screen');
+    await (await player.$('video.big')).click({ count: 2 });
+    await player.waitForFunction(() => document.fullscreenElement === document.documentElement, { timeout: 5000 });
+    assert(await bothShowing(), 'double-clicking the big picture does the same');
+    await player.keyboard.press('f');
+    await player.waitForFunction(() => !document.fullscreenElement, { timeout: 5000 });
+    await player.click('::-p-aria(Mute)');
+    assert(await player.$eval('video.big', (v) => v.muted), "the bar's speaker button mutes the big picture");
+    await player.keyboard.press('m');
+    assert(!(await player.$eval('video.big', (v) => v.muted)), 'and M unmutes it');
     await player.click('::-p-aria(Settings)');
     await player.screenshot({ path: path.join(artifactsDir, 'player-menu.png') });
     await player.click('::-p-aria(Settings)'); // close the menu
@@ -439,20 +474,36 @@ async function main() {
     await waitForPlayback(multi, 'two-level stream', 0.5);
     const autoNote = await waitForText(multi, /(240|720)p, picked automatically from 2 quality levels/);
     ok(`status names the quality on screen: "${autoNote.slice(0, 160)}"`);
-    const options = await multi.$$eval('label.quality option', (os) => os.map((o) => o.textContent));
+    await multi.click('::-p-aria(Settings)'); // close the menu, to see the bar
+    await multi.click('#quality');
+    await multi.screenshot({ path: path.join(artifactsDir, 'player-quality-menu.png') });
+    const options = await multi.$$eval('#quality-menu button', (bs) => bs.map((b) => b.textContent));
     assert(
       options.length === 3 && /^Auto/.test(options[0]) && /^720p/.test(options[1]) && /^240p/.test(options[2]),
-      `quality picker lists Auto, then highest first (${options.join(' | ')})`
+      `the bar's quality menu lists Auto, then highest first (${options.join(' | ')})`
     );
-    await multi.select('label.quality select', await multi.$$eval('label.quality option', (os) => os[2].value));
+    await multi.click('#quality-menu button:nth-child(3)');
     await waitForText(multi, /240p, picked by you \(of 2 quality levels\)/, 15000);
     ok('picking 240p switches to it and says it was picked by hand');
-    await multi.select('label.quality select', await multi.$$eval('label.quality option', (os) => os[1].value));
+    await multi.click('#quality');
+    await multi.click('#quality-menu button:nth-child(2)');
     await waitForText(multi, /720p, picked by you \(of 2 quality levels\)/, 15000);
+    assert((await multi.$eval('#resolution', (e) => e.textContent)) === '720p', 'the bar shows 720p');
     const lockedT = await multi.evaluate(() => document.querySelector('video').currentTime);
     await waitForPlayback(multi, 'two-level stream after switching up', lockedT + 1, 10000);
     ok('picking 720p switches up, and playback goes on');
     await multi.close();
+
+    step('A playlist linked directly (no list of qualities) still shows the real resolution');
+    const direct = await browser.newPage();
+    await direct.goto(`chrome-extension://${ext.id}/player.html`);
+    await direct.type('input[name=url]', MASTER_URL.replace('master.m3u8', 'index.m3u8'));
+    await direct.type('input[name=referer]', EMBED + '/');
+    await direct.click('button::-p-text(Play)');
+    await waitForPlayback(direct, 'directly linked playlist', 0.5);
+    const directNote = await waitForText(direct, /240p, the only quality level/);
+    ok(`status reads the size off the video: "${directNote.slice(0, 160)}"`);
+    await direct.close();
 
     step('A playlist the server garbles shows why it failed and what the server sent');
     const garbled = await browser.newPage();
@@ -497,9 +548,8 @@ async function main() {
     await waitForPlayback(flaky, 'flaky live stream after the retry', flakyT + 2);
     ok('it clears once the next refresh works, and playback goes on');
 
-    // Live streams just play: a pause, from the controls or the browser, is undone and noted.
-    await flaky.focus('video');
-    await flaky.keyboard.press('Space'); // the video's own pause key
+    // Live streams just play: a pause, from a media key or the browser, is undone and noted.
+    await flaky.evaluate(() => document.querySelector('video').pause());
     const pausedT = await flaky.evaluate(() => document.querySelector('video').currentTime);
     await waitForPlayback(flaky, 'flaky live stream after a pause', pausedT + 1, 5000);
     await flaky.click('::-p-aria(Settings)');

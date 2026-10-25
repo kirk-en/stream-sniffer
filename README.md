@@ -63,13 +63,19 @@ To update later, run `git pull`, then click the reload icon (↻) on the extensi
    the big picture. Each stream
    gets its own Referer and Origin, so the two can come from different sites. Problems
    (errors, buffering, failed requests the player is retrying) show over the video while they
-   last. Live streams just play: if a video pauses (from its controls, a media key, or Chrome
-   itself), the player starts it again at once and notes it in the ⚙ menu.
-5. The ⚙ button opens the player menu: where each stream came from, its status, a form to play
-   another URL on the big screen, **Pop out**, and the relay. **Pop out** moves the big video into
-   a small floating window that stays on top of other apps. Click **Back to tab** (or close the
-   floating window) to return it.
-6. To play a URL you already have, click **Open player** at the top of the popup. Then paste the
+   last. Live streams just play: if a video pauses (a media key, or Chrome itself), the player
+   starts it again at once and notes it in the ⚙ menu.
+5. The bar at the bottom controls the big picture. It fades out when the mouse rests. From left
+   to right: volume (**M** mutes), **LIVE** (grey when behind; click it to jump to live) or the
+   time, the resolution on screen, which opens a quality menu when the stream has more than one
+   (Auto follows your connection speed; a picked quality stays), **Pop out**, and full screen.
+   **Pop out** moves the big video into a small floating window that stays on top of other
+   apps; click it again (or close the floating window) to bring it back. Full screen (or **F**,
+   or a double-click on the video) fills the screen with the whole player, small picture
+   included.
+6. The ⚙ button opens the player menu: where each stream came from, its status, a form to play
+   another URL on the big screen (click its title to fold it away), and the relay.
+7. To play a URL you already have, click **Open player** at the top of the popup. Then paste the
    stream URL, plus a Referer if the server needs one.
 
 The first playlist in the list is usually the master playlist. That's the one to pick. If a page

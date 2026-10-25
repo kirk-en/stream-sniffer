@@ -45,6 +45,44 @@ body.player { background: #000; overflow: hidden; }
   font-size: 16px; line-height: 1; background: rgba(0, 0, 0, 0.7); opacity: 0.8;
 }
 .player #remove-small:hover { opacity: 1; }
+/* The control bar: white icons on a dark fade, like Chrome's own video controls. */
+.player #bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 2; height: 56px; box-sizing: border-box;
+  padding: 12px 12px 0; display: flex; align-items: center; gap: 4px;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.75)); color: #fff; transition: opacity 0.3s;
+}
+.player #bar[hidden] { display: none; }
+.player.idle #bar { opacity: 0; pointer-events: none; }
+.player.idle { cursor: none; }
+.player #bar button { background: none; border: none; color: #fff; border-radius: 50%; }
+.player #bar button:hover { background: rgba(255, 255, 255, 0.15); }
+.player #bar button[hidden] { display: none; }
+.player #bar .icon { width: 40px; height: 40px; padding: 8px; display: grid; place-items: center; }
+.player #bar svg { width: 24px; height: 24px; fill: currentColor; display: block; }
+.player #volume { width: 80px; accent-color: #fff; margin: 0 6px 0 2px; }
+.player #live, .player #quality { border-radius: 4px; padding: 4px 8px; font-weight: 600; font-size: 13px; }
+.player #live[hidden] { display: none; }
+.player #live::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: #888; vertical-align: 1px; }
+.player #live.at-edge::before { background: #ff4e45; }
+.player #live.at-edge { cursor: default; }
+.player #live.at-edge:hover { background: none; }
+.player #time { font-size: 13px; font-variant-numeric: tabular-nums; padding: 0 4px; }
+.player #bar .spacer { flex: 1; }
+.player #quality-wrap { position: relative; }
+.player #quality-wrap[hidden] { display: none; }
+.player #quality:disabled { cursor: default; color: #fff; }
+.player #quality:disabled:hover { background: none; }
+.player #quality-menu {
+  position: absolute; right: 0; bottom: calc(100% + 8px); min-width: 170px; padding: 6px 0;
+  background: rgba(28, 28, 28, 0.95); border-radius: 8px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+.player #quality-menu[hidden] { display: none; }
+.player #quality-menu button {
+  display: flex; width: 100%; gap: 10px; align-items: center; padding: 8px 14px; border-radius: 0; text-align: left; white-space: nowrap;
+}
+.player #quality-menu button::before { content: '✓'; width: 1em; visibility: hidden; }
+.player #quality-menu button[aria-checked='true']::before { visibility: visible; }
+.player #quality-menu .rate { margin-left: auto; color: #aaa; font-size: 11px; }
 .player #problems { position: fixed; top: 12px; left: 12px; right: 64px; z-index: 2; display: grid; gap: 4px; justify-items: start; pointer-events: none; }
 .player #problems p {
   margin: 0; padding: 4px 4px 4px 8px; border-radius: 6px; background: rgba(0, 0, 0, 0.75); overflow-wrap: anywhere;
@@ -73,10 +111,11 @@ body.player { background: #000; overflow: hidden; }
 .player .stream h2 { font-size: 11px; margin: 0; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 .player .stream a { color: var(--accent); overflow-wrap: anywhere; }
 .player form { display: grid; gap: 8px; }
+.player #play-url summary { cursor: pointer; user-select: none; }
+.player #play-url summary:hover { color: var(--text); }
+.player #play-url[open] summary { margin-bottom: 8px; }
 .player label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; }
 .player input, .player select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit; }
-.player form button { justify-self: start; }
-.player label.quality { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
-.player .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.player form button { justify-self: start; }.player .actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .player #cast-status:empty { display: none; }
 .player #cast-frame { width: 100%; height: 0; display: block; border: 1px solid var(--border); border-radius: 8px; }

@@ -5,6 +5,7 @@ const menu = document.getElementById('menu');
 const settingsBtn = document.getElementById('settings');
 const removeSmallBtn = document.getElementById('remove-small');
 const castStatus = document.getElementById('cast-status');
+const resolutionEl = document.getElementById('resolution');
 const params = new URLSearchParams(location.search);
 const videos = [...document.querySelectorAll('video')];
 
@@ -268,7 +269,7 @@ async function startPlayback(s) {
     s.autoMuted = true;
     try {
       await v.play();
-      s.status += ' · muted (autoplay policy), unmute in the controls';
+      s.status += ' · muted (autoplay policy), unmute with the speaker button';
       render();
     } catch (err2) {
       fail(s, `video.play() failed even muted: ${err2.message}`);
@@ -301,7 +302,6 @@ function layout() {
     const i = streams.findIndex((s) => s.video === v);
     v.classList.toggle('big', i === 0);
     v.classList.toggle('small', i > 0);
-    v.controls = i === 0;
     v.hidden = i === -1 || streams[i].casting;
     v.removeAttribute('style'); // the big one fills the tab; the small one is placed below
     if (i > 0) placeSmall(v);
@@ -441,6 +441,15 @@ for (const v of videos) {
     render();
     v.play().catch((err) => fail(s, `Couldn't resume after a pause: video.play() failed: ${err.message}`));
   });
+  v.addEventListener('resize', render); // the picture's size changed: the quality readout follows
+  for (const e of ['play', 'pause', 'volumechange', 'timeupdate', 'durationchange']) {
+    v.addEventListener(e, () => streamOf(v) === big() && renderBar());
+  }
+  v.addEventListener('dblclick', (e) => {
+    if (streamOf(v) !== big()) return; // the small one swaps on click instead
+    e.preventDefault();
+    toggleFullscreen();
+  });
   v.addEventListener('enterpictureinpicture', syncPopout);
   v.addEventListener('leavepictureinpicture', syncPopout);
 }
@@ -462,9 +471,12 @@ navigator.mediaSession.setActionHandler('play', () => {
   }
 });
 
-// "1080p", or the bitrate for a stream that doesn't say its resolution.
+// "1080p", or the bitrate for a stream that doesn't say its resolution. A playlist linked
+// directly (no list of qualities) says neither.
 function levelName(l) {
-  return l?.height ? `${l.height}p` : `${Math.round((l?.bitrate ?? 0) / 1000)} kbps`;
+  if (l?.height) return `${l.height}p`;
+  if (l?.bitrate) return `${Math.round(l.bitrate / 1000)} kbps`;
+  return 'unknown quality';
 }
 
 // Which quality is on screen and why, e.g. "720p, picked automatically from 2 quality levels".
@@ -474,14 +486,16 @@ function qualityText(s) {
   const n = levels.length;
   const count = `${n} quality level${n === 1 ? '' : 's'}`;
   if (s.playingLevel < 0) return count;
-  const now = levelName(levels[s.playingLevel]);
+  // The decoded picture's real height beats what the playlist claims, and works when it claims
+  // nothing.
+  const now = s.video.videoHeight ? `${s.video.videoHeight}p` : levelName(levels[s.playingLevel]);
   if (n === 1) return `${now}, the only quality level`;
   if (s.quality < 0) return `${now}, picked automatically from ${count}`;
   if (s.quality !== s.playingLevel) return `${now}, switching to ${levelName(levels[s.quality])} (of ${count})`;
   return `${now}, picked by you (of ${count})`;
 }
 
-// The menu's quality picker. Auto lets hls.js follow the connection speed; a picked level stays
+// The bar's quality menu. Auto lets hls.js follow the connection speed; a picked level stays
 // until changed. The switch happens at the next segment, so the picture doesn't stop.
 function setQuality(streamId, level) {
   const s = streams.find((x) => x.id === streamId);
@@ -555,17 +569,13 @@ function render() {
       .filter(Boolean)
       .join(' · '),
     url: s.source.url,
-    id: s.id,
-    quality: s.quality,
-    // Highest first, keeping each level's index in hls.levels.
-    levels: (s.hls?.levels ?? [])
-      .map((l, index) => ({ index, bitrate: l.bitrate, label: l.height ? `${levelName(l)} · ${(l.bitrate / 1e6).toFixed(1)} Mbps` : levelName(l) }))
-      .sort((a, b) => b.bitrate - a.bitrate),
   }));
   if (JSON.stringify(entries) !== renderedEntries) {
     renderedEntries = JSON.stringify(entries);
     streamsEl.replaceChildren(...entries.map(streamEntry));
   }
+
+  renderBar();
 
   const b = big()?.source;
   document.title = b?.pageUrl ? `▶ ${b.pageTitle || b.pageUrl}` : 'Stream Sniffer Player';
@@ -593,17 +603,6 @@ function streamEntry(e) {
   status.className = 'muted small';
   status.textContent = e.status;
   el.append(status);
-  if (e.levels.length > 1) {
-    const label = document.createElement('label');
-    label.className = 'quality';
-    const select = document.createElement('select');
-    for (const { index, label: text } of [{ index: -1, label: 'Auto (follows your connection speed)' }, ...e.levels]) {
-      select.append(new Option(text, index, false, index === e.quality));
-    }
-    select.addEventListener('change', () => setQuality(e.id, Number(select.value)));
-    label.append('Quality ', select);
-    el.append(label);
-  }
   const url = document.createElement('code');
   url.textContent = e.url;
   el.append(url);
@@ -639,7 +638,9 @@ function persist() {
 // The label follows the real state, so closing the floating window by hand updates it too.
 const popoutBtn = document.getElementById('popout');
 function syncPopout() {
-  popoutBtn.textContent = document.pictureInPictureElement ? 'Back to tab' : 'Pop out';
+  const out = !!document.pictureInPictureElement;
+  popoutBtn.ariaLabel = out ? 'Back to tab' : 'Pop out';
+  popoutBtn.title = out ? 'Back to tab' : 'Pop out: play in a floating window that stays on top';
 }
 popoutBtn.addEventListener('click', async () => {
   pageError = '';
@@ -652,6 +653,208 @@ popoutBtn.addEventListener('click', async () => {
   }
   render();
 });
+
+// The control bar for the big picture, in place of Chrome's (see player.html). Icons are
+// Material Design icons, as in Chrome's own controls.
+const ICONS = {
+  play: 'M8 5v14l11-7z',
+  volume: 'M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z',
+  muted: 'M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z',
+  popout: 'M19 11h-8v6h8v-6zm4 8V4.98C23 3.88 22.1 3 21 3H3c-1.1 0-2 .88-2 1.98V19c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 .02H3V4.97h18v14.05z',
+  fullscreen: 'M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z',
+  exitFullscreen: 'M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z',
+};
+function setIcon(btn, name) {
+  if (btn.dataset.icon === name) return;
+  btn.dataset.icon = name;
+  btn.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${ICONS[name]}"/></svg>`;
+}
+const bar = document.getElementById('bar');
+const playBtn = document.getElementById('play');
+const muteBtn = document.getElementById('mute');
+const volumeEl = document.getElementById('volume');
+const liveBtn = document.getElementById('live');
+const timeEl = document.getElementById('time');
+const qualityWrap = document.getElementById('quality-wrap');
+const qualityBtn = document.getElementById('quality');
+const qualityMenu = document.getElementById('quality-menu');
+const fullscreenBtn = document.getElementById('fullscreen');
+setIcon(playBtn, 'play');
+setIcon(popoutBtn, 'popout');
+setIcon(fullscreenBtn, 'fullscreen');
+
+function clock(t) {
+  t = Math.floor(t);
+  const [h, m, sec] = [Math.floor(t / 3600), Math.floor(t / 60) % 60, t % 60];
+  return `${h ? `${h}:${String(m).padStart(2, '0')}` : m}:${String(sec).padStart(2, '0')}`;
+}
+
+// How far behind the live edge counts as "behind": a few segments.
+function behindLive(s) {
+  const edge = s.hls.liveSyncPosition;
+  const target = s.hls.latestLevelDetails?.targetduration || 2;
+  return edge != null && edge - s.video.currentTime > Math.max(10, 3 * target);
+}
+
+function renderBar() {
+  const s = big();
+  bar.hidden = !s?.hls;
+  if (bar.hidden) return closeQualityMenu();
+  const v = s.video;
+  // Live streams just play (see the 'pause' listener), so there's no pause button; play shows
+  // only for a video that stopped and needs a press to start again.
+  playBtn.hidden = !v.paused;
+  const silent = v.muted || v.volume === 0;
+  setIcon(muteBtn, silent ? 'muted' : 'volume');
+  muteBtn.ariaLabel = silent ? 'Unmute' : 'Mute';
+  muteBtn.title = `${muteBtn.ariaLabel} (M)`;
+  volumeEl.value = silent ? 0 : v.volume;
+
+  const live = !!s.hls.latestLevelDetails?.live;
+  liveBtn.hidden = !live;
+  timeEl.hidden = live;
+  if (live) {
+    const behind = behindLive(s);
+    liveBtn.textContent = 'LIVE';
+    liveBtn.classList.toggle('at-edge', !behind);
+    liveBtn.title = behind ? 'Behind live: click to jump to live' : 'Playing live';
+  } else {
+    timeEl.textContent = Number.isFinite(v.duration) ? `${clock(v.currentTime)} / ${clock(v.duration)}` : clock(v.currentTime);
+  }
+
+  // The resolution on screen; with more than one quality it opens the quality menu.
+  const levels = s.hls.levels ?? [];
+  const playing = levels[s.playingLevel];
+  resolutionEl.textContent = v.videoHeight ? `${v.videoHeight}p` : playing ? levelName(playing) : '';
+  qualityWrap.hidden = !resolutionEl.textContent;
+  qualityBtn.disabled = levels.length < 2;
+  qualityBtn.title = levels.length < 2 ? 'Resolution (this stream has only one quality)' : `Quality: ${s.quality < 0 ? 'Auto' : 'picked by you'}`;
+  if (qualityBtn.disabled) closeQualityMenu();
+  else if (!qualityMenu.hidden) fillQualityMenu(s);
+}
+
+// Auto first, then each quality, highest first. Rebuilt only when it changes, so an item isn't
+// swapped out from under a click.
+function fillQualityMenu(s) {
+  const h = s.video.videoHeight;
+  const items = [
+    { index: -1, name: s.quality < 0 && h ? `Auto (${h}p)` : 'Auto', rate: '' },
+    ...s.hls.levels
+      .map((l, index) => ({ index, name: levelName(l), rate: l.bitrate ? `${(l.bitrate / 1e6).toFixed(1)} Mbps` : '', bitrate: l.bitrate }))
+      .sort((a, b) => b.bitrate - a.bitrate),
+  ];
+  const key = JSON.stringify([s.id, s.quality, items]);
+  if (qualityMenu.dataset.key === key) return;
+  qualityMenu.dataset.key = key;
+  qualityMenu.replaceChildren(
+    ...items.map((it) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.role = 'menuitemradio';
+      b.setAttribute('aria-checked', String(it.index === s.quality));
+      const name = document.createElement('span');
+      name.textContent = it.name;
+      b.append(name);
+      if (it.rate) {
+        const rate = document.createElement('span');
+        rate.className = 'rate';
+        rate.textContent = it.rate;
+        b.append(rate);
+      }
+      b.addEventListener('click', () => {
+        closeQualityMenu();
+        setQuality(s.id, it.index);
+      });
+      return b;
+    })
+  );
+}
+function openQualityMenu() {
+  qualityMenu.hidden = false;
+  qualityBtn.ariaExpanded = 'true';
+  fillQualityMenu(big());
+}
+function closeQualityMenu() {
+  qualityMenu.hidden = true;
+  qualityBtn.ariaExpanded = 'false';
+}
+qualityBtn.addEventListener('click', () => (qualityMenu.hidden ? openQualityMenu() : closeQualityMenu()));
+addEventListener('pointerdown', (e) => {
+  if (!qualityWrap.contains(e.target)) closeQualityMenu();
+});
+
+playBtn.addEventListener('click', () => {
+  const s = big();
+  s?.video.play().catch((err) => fail(s, `video.play() failed: ${err.message}`));
+});
+function toggleMute() {
+  const s = big();
+  if (!s?.hls) return;
+  const v = s.video;
+  if (v.muted || v.volume === 0) {
+    v.muted = false;
+    if (v.volume === 0) v.volume = 0.5;
+  } else {
+    v.muted = true;
+  }
+  s.autoMuted = false;
+}
+muteBtn.addEventListener('click', toggleMute);
+volumeEl.addEventListener('input', () => {
+  const s = big();
+  if (!s?.hls) return;
+  s.video.volume = Number(volumeEl.value);
+  s.video.muted = s.video.volume === 0;
+  s.autoMuted = false;
+});
+liveBtn.addEventListener('click', () => {
+  const s = big();
+  if (s?.hls && behindLive(s)) s.video.currentTime = s.hls.liveSyncPosition;
+});
+
+// Full screen takes the whole page, so the small picture and messages stay. (Chrome's own
+// would take just the video, and won't let the page switch it over afterwards.) The button,
+// F, and a double-click on the big picture all toggle it.
+async function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await document.documentElement.requestFullscreen();
+  } catch (err) {
+    failPage(`Couldn't change full screen: ${err.message}`);
+  }
+}
+fullscreenBtn.addEventListener('click', toggleFullscreen);
+document.addEventListener('fullscreenchange', () => {
+  const on = !!document.fullscreenElement;
+  setIcon(fullscreenBtn, on ? 'exitFullscreen' : 'fullscreen');
+  fullscreenBtn.ariaLabel = on ? 'Exit full screen' : 'Full screen';
+  fullscreenBtn.title = on ? 'Exit full screen (F or Esc)' : 'Full screen (F, or double-click the video)';
+});
+
+// F: full screen. M: mute. Esc: close the quality menu. Not while typing in the form.
+addEventListener('keydown', (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest('input:not([type=range]), select, textarea')) return;
+  const key = e.key.toLowerCase();
+  if (key === 'escape') return closeQualityMenu();
+  if (key === 'f') toggleFullscreen();
+  else if (key === 'm') toggleMute();
+  else return;
+  e.preventDefault();
+});
+
+// The bar and the mouse pointer fade out once the mouse has rested for a few seconds, as with
+// Chrome's controls. Not while the pointer is on the bar or a menu is open.
+let idleTimer;
+function wake() {
+  document.body.classList.remove('idle');
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    if (big()?.hls && menu.hidden && qualityMenu.hidden && !bar.matches(':hover')) document.body.classList.add('idle');
+    else wake();
+  }, 3000);
+}
+for (const e of ['pointermove', 'pointerdown', 'keydown']) addEventListener(e, wake);
+wake();
 
 // The popup's "Add to player" sends this to the player tab used last.
 const myTabId = chrome.tabs.getCurrent().then((t) => t.id);
@@ -826,6 +1029,15 @@ function fillForm() {
   for (const name of ['url', 'referer', 'origin']) form.elements[name].value = s?.[name] || '';
 }
 
+// "Play a URL" folds away, and stays as it was left. Only a click saves: init() opens it when
+// there's nothing to play, which shouldn't count.
+const playUrl = document.getElementById('play-url');
+playUrl.querySelector('summary').addEventListener('click', () => {
+  chrome.storage.local
+    .set({ playUrlOpen: !playUrl.open }) // the click hasn't toggled it yet
+    .catch((err) => failPage(`Couldn't save whether "Play a URL" is open: ${err.message}`));
+});
+
 form.addEventListener('submit', (e) => {
   e.preventDefault();
   saveSource(readForm())
@@ -844,9 +1056,12 @@ async function init() {
     sources.push(await saveSource({ url: params.get('url'), referer: params.get('referer') || '', origin: params.get('origin') || '' }));
   }
   if (!sources.length) return openMenu(true);
+  const { playUrlOpen } = await chrome.storage.local.get('playUrlOpen');
+  playUrl.open = playUrlOpen !== false;
   for (const [i, source] of sources.entries()) await startStream(source, i);
 }
 init().catch((err) => {
+  playUrl.open = true;
   openMenu(true);
   failPage(err.message);
 });
