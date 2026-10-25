@@ -130,8 +130,7 @@ body.player { background: #000; overflow: hidden; }
 .player #menu details summary { cursor: pointer; user-select: none; }
 .player #menu details summary:hover { color: var(--text); }
 .player #menu details[open] summary { margin-bottom: 8px; }
-.player #cast { display: grid; gap: 8px; }
-.player #cast[open] > summary { margin-bottom: 0; }
+.player #cast { display: grid; gap: 8px; margin-top: 14px; }
 .player label { display: grid; gap: 4px; color: var(--muted); font-size: 11px; }
 .player input, .player select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit; }
 .player form button { justify-self: start; }

@@ -104,9 +104,10 @@ async function waitForText(page, re, timeoutMs = 10000) {
   return handle.jsonValue();
 }
 
-// Unfolds "Cast via relay" in the player's menu (if it isn't already) and clicks Start casting.
+// Unfolds "Play a URL" in the player's menu, where casting is (if it isn't already), and clicks
+// Start casting.
 async function startCasting(page) {
-  if (!(await page.$eval('#cast', (d) => d.open))) await page.click('#cast summary');
+  if (!(await page.$eval('#play-url', (d) => d.open))) await page.click('#play-url summary');
   await page.click('button::-p-text(Start casting)');
 }
 
@@ -450,8 +451,8 @@ async function main() {
     assert((await visible()) === 1, 'it stays removed after a reload');
     await player.click('::-p-aria(Settings)');
 
-    step('"Cast via relay" starts folded; without the relay running it says how to start it');
-    assert(!(await player.$eval('#cast', (d) => d.open)), '"Cast via relay" is folded away at first');
+    step('"Cast via relay" sits in the "Play a URL" fold; without the relay running it says how to start it');
+    assert(await player.$('#play-url #relay'), 'Start casting is inside the "Play a URL" fold');
     await startCasting(player);
     const noRelayMsg = await waitForText(player, /^Relay:.*relay\/server\.mjs/);
     ok(`player reports: "${noRelayMsg}"`);

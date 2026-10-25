@@ -96,8 +96,8 @@ To update later, run `git pull`, then click the reload icon (↻) on the extensi
    or a double-click on the video) fills the screen with the whole player, small picture
    included.
 6. The ⚙ button opens the player menu: where each stream came from, its status, a form to play
-   another URL on the big screen (click its title to fold it away), and the relay (folded away
-   until you open it).
+   another URL on the big screen, with the relay's **Start casting** under it (click its title
+   to fold both away).
 7. To play a URL you already have, click **Open player** at the top of the popup. Then paste the
    stream URL, plus a Referer if the server needs one.
 8. Closed the player? **Reopen last player** at the top of the popup brings back the streams it
@@ -145,7 +145,8 @@ and then `[relay] ready`.
 ### Cast
 
 1. Open a stream in the player (**Open in player** in the popup).
-2. Open the ⚙ menu, unfold **Cast via relay (beta)**, and click **Start casting**. It casts the big
+2. Open the ⚙ menu, unfold **Play a URL on the big screen**, and click **Start casting** under
+   **Cast via relay (beta)**. It casts the big
    picture's stream. The player checks the stream, then shows the cast controls below the button.
 3. Click **Cast to TV** and choose your Chromecast.
 

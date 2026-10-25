@@ -1411,13 +1411,6 @@ function rememberFold(details, key, name) {
 }
 const playUrl = document.getElementById('play-url');
 rememberFold(playUrl, 'playUrlOpen', 'Play a URL');
-// "Cast via relay" starts folded: most people don't use it.
-const castSection = document.getElementById('cast');
-rememberFold(castSection, 'castOpen', 'Cast via relay');
-chrome.storage.local
-  .get('castOpen')
-  .then(({ castOpen }) => (castSection.open = !!castOpen))
-  .catch((err) => failPage(`Couldn't read whether "Cast via relay" was left open: ${err.message}`));
 
 form.addEventListener('submit', (e) => {
   e.preventDefault();

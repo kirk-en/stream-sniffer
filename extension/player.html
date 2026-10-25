@@ -40,7 +40,7 @@
   <div id="menu" hidden>
     <div id="streams"></div>
     <label class="toggle"><input id="frame-warnings" type="checkbox" checked> Warn about lost frames and refresh-rate hitches</label>
-    <!-- Folds away; the player remembers whether it was left open. -->
+    <!-- Folds away, casting included; the player remembers whether it was left open. -->
     <details id="play-url" open>
       <summary class="muted small">Play a URL on the big screen</summary>
       <form id="form">
@@ -49,16 +49,15 @@
         <label>Origin <input name="origin" type="url" placeholder="https://embed-site (optional)"></label>
         <button type="submit">Play</button>
       </form>
-    </details>
-    <!-- Folded unless left open (remembered). -->
-    <details id="cast">
-      <summary class="muted small">Cast via relay (beta)</summary>
-      <div class="actions">
-        <button id="relay" type="button" title="Experimental: needs the relay running (node relay/server.mjs)">Start casting</button>
+      <div id="cast">
+        <p class="muted small">Cast via relay (beta)</p>
+        <div class="actions">
+          <button id="relay" type="button" title="Experimental: needs the relay running (node relay/server.mjs)">Start casting</button>
+        </div>
+        <p id="cast-status" class="muted small"></p>
+        <!-- The relay's cast page. It can load Google's Cast SDK, which extension pages can't. -->
+        <iframe id="cast-frame" hidden title="Cast controls"></iframe>
       </div>
-      <p id="cast-status" class="muted small"></p>
-      <!-- The relay's cast page. It can load Google's Cast SDK, which extension pages can't. -->
-      <iframe id="cast-frame" hidden title="Cast controls"></iframe>
     </details>
   </div>
   <script src="vendor/hls.min.js"></script>
