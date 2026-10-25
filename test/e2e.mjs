@@ -592,6 +592,26 @@ async function main() {
     const rotNote = await waitForText(rot, /skipped \d+ playlist problems?.*media sequence mismatch/);
     ok(`stream status says: "${rotNote.slice(0, 160)}…"`);
 
+    step('A decoding error is recovered in place; a second one soon after restarts the stream');
+    // The error hls.js reports when the browser's decoder rejects video (a corrupt segment).
+    const decodeError = () =>
+      rot.evaluate(() => {
+        streams[0].hls.trigger(Hls.Events.ERROR, { type: Hls.ErrorTypes.MEDIA_ERROR, details: Hls.ErrorDetails.BUFFER_APPEND_ERROR, fatal: true });
+        return { id: streams[0].id, t: streams[0].video.currentTime };
+      });
+    const problemsShow = (page, re) =>
+      page.waitForFunction((src) => new RegExp(src).test(document.getElementById('problems').textContent), { timeout: 15000, polling: 'mutation' }, re.source);
+    const beforeDecode = await decodeError();
+    await problemsShow(rot, /decoder hit a problem.*recovering/);
+    ok('it says the decoder hit a problem and is recovering');
+    // Live: the playlist holds only a few seconds, so playing on needs new segments loaded.
+    await waitForPlayback(rot, 'live stream after decoder recovery', beforeDecode.t + 6, 20000);
+    assert((await rot.evaluate(() => streams[0].id)) === beforeDecode.id, 'and plays on, loading new segments, without reloading the stream');
+    await decodeError();
+    await problemsShow(rot, /couldn't be decoded.*Retrying in \d+ s \(try 1 of 3\)/);
+    ok('a second one within 30 s stops it, and the automatic retry takes over');
+    await rot.close();
+
     step('A playlist refresh that fails once shows while it is retried, then clears; a pause is undone');
     const flaky = await browser.newPage();
     await flaky.goto(`chrome-extension://${ext.id}/player.html`);

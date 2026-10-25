@@ -71,7 +71,8 @@ To update later, run `git pull`, then click the reload icon (↻) on the extensi
    brings it back. Click its **×** to remove it. The sound always follows the big picture. Each
    stream gets its own Referer and Origin, so the two can come from different sites. Problems
    (errors, buffering, failed requests the player is retrying) show over the video while they
-   last. If a stream stops because its server stopped answering or had an error, the player
+   last. A decoding glitch is fixed in place without reloading. If a stream stops (its server
+   stopped answering or had an error, or the video couldn't be decoded twice within 30 s), the player
    tries it again by itself (after 5, 15 and 30 seconds, with a countdown and the reason) and
    says when it's back. A stopped stream also has a **Retry** button. A link the server refuses
    (403, 404) isn't retried by itself: it has most likely expired, so reopen it from its page.

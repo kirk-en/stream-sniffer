@@ -76,9 +76,9 @@ function failPage(msg) {
   render();
 }
 
-// A stream that stops because the server didn't answer (a dropped connection, a timeout, a
-// 5xx) is tried again by itself after these waits; one that plays again starts the count over.
-// A refused link (4xx) isn't: it has most likely expired, and only its page has a fresh one.
+// A stream that stops (the server didn't answer, timed out or had an error; the video couldn't
+// be decoded) is tried again by itself after these waits; one that plays again starts the count
+// over. A refused link (4xx) isn't: it has most likely expired, and only its page has a fresh one.
 const RETRY_DELAYS_S = [5, 15, 30];
 
 // Plays source in slot 0 (big) or 1 (small), replacing whatever was there. When it's a retry:
@@ -114,6 +114,7 @@ async function startStream(source, slot, { retries = 0, lastReason = '', manual 
     stopped: false, // hls.js gave up (a fatal error); Retry starts it again
     retries,
     retryTimer: null, // the countdown to the next automatic try
+    mediaRecoveredAt: -Infinity, // performance.now() of the last decoder recovery (see the ERROR handler)
     // Shown while a retry connects, until the picture is back.
     retrying: retries > 0 || manual,
     retryNote: manual
@@ -145,11 +146,27 @@ async function startStream(source, slot, { retries = 0, lastReason = '', manual 
     loader: loaderFor(stream),
     ignorePlaylistParsingErrors: true,
     debug: hlsLogger(stream),
+    // hls.js keeps everything already played by default. Over a game of several hours that fills
+    // the browser's media memory until it has to evict mid-playback, which can hitch. Live
+    // streams are never rewound that far, so keep a minute.
+    backBufferLength: 60,
   }));
   hls.on(Hls.Events.ERROR, (_e, data) => {
     const code = data.response?.code;
     const why = data.response?.text ? ` (${data.response.text})` : parseProblem(data);
     const detail = `${data.type} / ${data.details}${why}${code ? ` — HTTP ${code}` : ''}${data.url ? ` — ${data.url}` : ''}${serverSent(data)}`;
+    // A decoding hiccup (a corrupt segment, a decoder reset) is fixed by hls.js itself: it resets
+    // the decoder and goes on from the same spot, without reloading. At most once in 30 s; a
+    // second one soon after stops the stream, and the automatic retries take over.
+    if (data.fatal && data.type === Hls.ErrorTypes.MEDIA_ERROR && performance.now() - stream.mediaRecoveredAt > 30000) {
+      stream.mediaRecoveredAt = performance.now();
+      console.warn('[stream-sniffer] fatal media error, recovering:', detail);
+      stream.lastProblem = `${new Date().toLocaleTimeString()}: the video decoder hit a problem (${data.details}); recovering`;
+      stream.problemKind = null; // over when the video plays again
+      render();
+      hls.recoverMediaError();
+      return;
+    }
     if (data.fatal) {
       stream.status = 'Stopped';
       stream.stopped = true;
@@ -157,7 +174,7 @@ async function startStream(source, slot, { retries = 0, lastReason = '', manual 
       if (stream.error) return fail(stream, stream.error);
       const reason = stopReason(data, code);
       const refused = code >= 400 && code < 500;
-      if (data.type === Hls.ErrorTypes.NETWORK_ERROR && !refused && stream.retries < RETRY_DELAYS_S.length) {
+      if (!refused && stream.retries < RETRY_DELAYS_S.length) {
         return scheduleRetry(stream, reason, detail);
       }
       const n = stream.retries;
@@ -248,6 +265,8 @@ function stopReason(data, code) {
   if (code >= 500) return `the server had an error (HTTP ${code})`;
   if (code >= 400) return `the server refused the link (HTTP ${code})`;
   if (/Timeout$/.test(data.details)) return 'the server took too long to answer';
+  if (data.type === Hls.ErrorTypes.MEDIA_ERROR) return `the video couldn't be decoded (${data.details})`;
+  if (data.type !== Hls.ErrorTypes.NETWORK_ERROR) return `playback hit a problem (${data.details})`;
   return "the server didn't answer (the connection dropped or couldn't be made)";
 }
 
