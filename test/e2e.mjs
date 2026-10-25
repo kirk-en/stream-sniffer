@@ -97,6 +97,12 @@ async function waitForText(page, re, timeoutMs = 10000) {
   return handle.jsonValue();
 }
 
+// Unfolds "Cast via relay" in the player's menu (if it isn't already) and clicks Start casting.
+async function startCasting(page) {
+  if (!(await page.$eval('#cast', (d) => d.open))) await page.click('#cast summary');
+  await page.click('button::-p-text(Start casting)');
+}
+
 // Starts the relay the way a user would (`node relay/server.mjs`) and waits for its "ready"
 // line, which it prints only after checking that localhost and the LAN address reach it.
 function startRelay() {
@@ -437,14 +443,15 @@ async function main() {
     assert((await visible()) === 1, 'it stays removed after a reload');
     await player.click('::-p-aria(Settings)');
 
-    step('"Cast via relay" without the relay running says how to start it');
-    await player.click('button::-p-text(Cast via relay)');
+    step('"Cast via relay" starts folded; without the relay running it says how to start it');
+    assert(!(await player.$eval('#cast', (d) => d.open)), '"Cast via relay" is folded away at first');
+    await startCasting(player);
     const noRelayMsg = await waitForText(player, /^Relay:.*relay\/server\.mjs/);
     ok(`player reports: "${noRelayMsg}"`);
 
     step('Start the relay; "Cast via relay" shows the cast controls inside the player, with a LAN address for the TV');
     relay = await startRelay();
-    await player.click('button::-p-text(Cast via relay)');
+    await startCasting(player);
     const castFrame = await player.waitForFrame((f) => f.url().startsWith(`${RELAY}/cast/`), { timeout: 10000 });
     const mediaText = await waitForText(castFrame, /http:\/\/[\d.]+:8789\/\S+/);
     const mediaUrl = mediaText.match(/http:\/\/[\d.]+:8789\/\S+/)[0];
@@ -499,7 +506,7 @@ async function main() {
     await waitForPlayback(trickyPlayer, 'extension player on PNG-disguised stream');
     ok('extension player plays the PNG-disguised stream');
     await trickyPlayer.click('::-p-aria(Settings)');
-    await trickyPlayer.click('button::-p-text(Cast via relay)');
+    await startCasting(trickyPlayer);
     const trickyFrame = await trickyPlayer.waitForFrame((f) => f.url().startsWith(`${RELAY}/cast/`), { timeout: 10000 });
     const trickyMedia = (await waitForText(trickyFrame, /http:\/\/[\d.]+:8789\/\S+/)).match(/http:\/\/[\d.]+:8789\/\S+/)[0];
     const tMaster = await (await fetch(trickyMedia)).text();
@@ -627,7 +634,7 @@ async function main() {
     ok('the × on the error dismisses it');
 
     step('"Cast via relay" with headers the CDN rejects reports the 403 instead of casting a dead URL');
-    await bad.click('button::-p-text(Cast via relay)');
+    await startCasting(bad);
     const badRelayMsg = await waitForText(bad, /^Relay:.*403/);
     ok(`player reports: "${badRelayMsg}"`);
 

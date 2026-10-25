@@ -49,12 +49,16 @@
         <button type="submit">Play</button>
       </form>
     </details>
-    <div class="actions">
-      <button id="relay" type="button" title="Experimental: needs the relay running (node relay/server.mjs)">Cast via relay (beta)</button>
-    </div>
-    <p id="cast-status" class="muted small"></p>
-    <!-- The relay's cast page. It can load Google's Cast SDK, which extension pages can't. -->
-    <iframe id="cast-frame" hidden title="Cast controls"></iframe>
+    <!-- Folded unless left open (remembered). -->
+    <details id="cast">
+      <summary class="muted small">Cast via relay (beta)</summary>
+      <div class="actions">
+        <button id="relay" type="button" title="Experimental: needs the relay running (node relay/server.mjs)">Start casting</button>
+      </div>
+      <p id="cast-status" class="muted small"></p>
+      <!-- The relay's cast page. It can load Google's Cast SDK, which extension pages can't. -->
+      <iframe id="cast-frame" hidden title="Cast controls"></iframe>
+    </details>
   </div>
   <script src="vendor/hls.min.js"></script>
   <script src="disguise.js"></script>

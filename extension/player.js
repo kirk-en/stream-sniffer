@@ -938,7 +938,7 @@ async function bridgeLoop(b) {
     }
     if (b.stopped) return;
     if (res.status === 204) continue; // nothing to fetch during this poll
-    if (res.status === 404) return b.fail('the relay no longer knows this stream (did it restart?). Click "Cast via relay" again.');
+    if (res.status === 404) return b.fail('the relay no longer knows this stream (did it restart?). Click "Start casting" again.');
     if (res.status === 410) return b.fail((await res.json().catch(() => ({}))).error || 'stream retired by the relay');
     if (!res.ok) return b.fail(`relay error HTTP ${res.status}: ${await res.text()}`);
     const job = await res.json();
@@ -1051,14 +1051,24 @@ function fillForm() {
   for (const name of ['url', 'referer', 'origin']) form.elements[name].value = s?.[name] || '';
 }
 
-// "Play a URL" folds away, and stays as it was left. Only a click saves: init() opens it when
-// there's nothing to play, which shouldn't count.
+// The menu's fold-away sections stay as they were left. Only a click saves: init() opens "Play
+// a URL" when there's nothing to play, which shouldn't count.
+function rememberFold(details, key, name) {
+  details.querySelector('summary').addEventListener('click', () => {
+    chrome.storage.local
+      .set({ [key]: !details.open }) // the click hasn't toggled it yet
+      .catch((err) => failPage(`Couldn't save whether "${name}" is open: ${err.message}`));
+  });
+}
 const playUrl = document.getElementById('play-url');
-playUrl.querySelector('summary').addEventListener('click', () => {
-  chrome.storage.local
-    .set({ playUrlOpen: !playUrl.open }) // the click hasn't toggled it yet
-    .catch((err) => failPage(`Couldn't save whether "Play a URL" is open: ${err.message}`));
-});
+rememberFold(playUrl, 'playUrlOpen', 'Play a URL');
+// "Cast via relay" starts folded: most people don't use it.
+const castSection = document.getElementById('cast');
+rememberFold(castSection, 'castOpen', 'Cast via relay');
+chrome.storage.local
+  .get('castOpen')
+  .then(({ castOpen }) => (castSection.open = !!castOpen))
+  .catch((err) => failPage(`Couldn't read whether "Cast via relay" was left open: ${err.message}`));
 
 form.addEventListener('submit', (e) => {
   e.preventDefault();
