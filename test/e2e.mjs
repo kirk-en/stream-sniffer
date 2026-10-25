@@ -367,8 +367,20 @@ async function main() {
     assert(servers.rejected.length === 0, `both CDNs still accepted every request (${JSON.stringify(servers.rejected)})`);
     await player.screenshot({ path: path.join(artifactsDir, 'player-two-streams.png') });
 
-    const resLabel = await player.$eval('#resolution', (e) => e.textContent);
-    assert(resLabel === '240p', `the label above the playback bar shows the big picture's resolution ("${resLabel}")`);
+    // The test video is 320x240 at 25 fps. The frame rate takes 2 s of video to count.
+    const barLabel = await player
+      .waitForFunction(
+        () => {
+          const text = document.getElementById('quality').textContent;
+          return /^240p25·?\d+(\.\d)? (Mbps|kbps)$/.test(text) && text;
+        },
+        { timeout: 10000, polling: 250 }
+      )
+      .then((h) => h.jsonValue())
+      .catch(async (err) => {
+        throw new Error(`bar label is "${await player.$eval('#quality', (e) => e.textContent)}": ${err.message}`);
+      });
+    ok(`the bar shows the big picture's resolution, frame rate and measured bitrate ("${barLabel}")`);
     const bothShowing = () => player.$$eval('video', (vs) => vs.filter((v) => !v.hidden && v.checkVisibility()).length === 2);
     await player.click('::-p-aria(Full screen)');
     await player.waitForFunction(() => document.fullscreenElement === document.documentElement, { timeout: 5000 });
@@ -514,7 +526,8 @@ async function main() {
     await multi.click('#quality');
     await multi.click('#quality-menu button:nth-child(2)');
     await waitForText(multi, /720p, picked by you \(of 2 quality levels\)/, 15000);
-    assert((await multi.$eval('#resolution', (e) => e.textContent)) === '720p', 'the bar shows 720p');
+    await multi.waitForFunction(() => /^720p/.test(document.getElementById('resolution').textContent), { timeout: 5000 });
+    ok('the bar shows 720p');
     const lockedT = await multi.evaluate(() => document.querySelector('video').currentTime);
     await waitForPlayback(multi, 'two-level stream after switching up', lockedT + 1, 10000);
     ok('picking 720p switches up, and playback goes on');

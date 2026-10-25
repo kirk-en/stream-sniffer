@@ -8,6 +8,7 @@ const hideSmallBtn = document.getElementById('hide-small');
 const showSmallBtn = document.getElementById('show-small');
 const castStatus = document.getElementById('cast-status');
 const resolutionEl = document.getElementById('resolution');
+const bitrateEl = document.getElementById('bitrate');
 const params = new URLSearchParams(location.search);
 const videos = [...document.querySelectorAll('video')];
 
@@ -158,6 +159,8 @@ async function startStream(source, slot) {
     skipped: 0, // playlist problems hls.js skipped (see hlsLogger)
     lastSkipped: '',
     playingLevel: -1, // index into hls.levels of the picture on screen; -1 until the first one
+    rates: [], // the last few video segments' { level, bytes, duration }, for measuredMbps
+    fps: 0, // frames shown per second of video, counted as they're shown (see the frame counter)
     quality: -1, // the quality picked in the menu: an index into hls.levels, or -1 for Auto
   };
   streams[slot] = stream;
@@ -213,6 +216,15 @@ async function startStream(source, slot) {
     render();
   };
   hls.on(Hls.Events.FRAG_LOADED, recovered('segment'));
+  // The bitrate a stream really delivers: each video segment's size over its length. A playlist's
+  // own figure is only a claim, and a playlist linked directly has none.
+  hls.on(Hls.Events.FRAG_LOADED, (_e, { frag, payload }) => {
+    if (frag.type !== 'main' || !(frag.duration > 0)) return;
+    // payload is after any unwrapping (see unwrapping), so a disguised segment counts as video.
+    stream.rates.push({ level: frag.level, bytes: payload?.byteLength || frag.stats.total, duration: frag.duration });
+    if (stream.rates.length > 8) stream.rates.shift();
+    if (stream === big()) renderBar();
+  });
   for (const e of [Hls.Events.MANIFEST_LOADED, Hls.Events.LEVEL_LOADED, Hls.Events.AUDIO_TRACK_LOADED, Hls.Events.SUBTITLE_TRACK_LOADED]) {
     hls.on(e, recovered('playlist'));
   }
@@ -461,6 +473,7 @@ for (const v of videos) {
     v.play().catch((err) => fail(s, `Couldn't resume after a pause: video.play() failed: ${err.message}`));
   });
   v.addEventListener('resize', render); // the picture's size changed: the quality readout follows
+  countFrames(v);
   for (const e of ['play', 'pause', 'volumechange', 'timeupdate', 'durationchange']) {
     v.addEventListener(e, () => streamOf(v) === big() && renderBar());
   }
@@ -489,6 +502,43 @@ navigator.mediaSession.setActionHandler('play', () => {
     if (s.hls) s.video.play().catch((err) => fail(s, `video.play() failed: ${err.message}`));
   }
 });
+
+// Frame rate, counted as frames are shown: frames per second of video over each 2 s stretch.
+// Snapped to the usual rates, since a count over 2 s wobbles by a frame or so. Frames dropped
+// because the computer can't keep up aren't shown, so they lower it, as they should.
+const COMMON_FPS = [24, 25, 30, 48, 50, 60, 120];
+function countFrames(v) {
+  let from = null; // { s, mediaTime, frames }
+  const tick = (_now, meta) => {
+    const s = streamOf(v);
+    if (!s || !from || from.s !== s || meta.mediaTime < from.mediaTime) {
+      from = s && { s, mediaTime: meta.mediaTime, frames: meta.presentedFrames };
+    } else if (meta.mediaTime - from.mediaTime >= 2) {
+      const fps = (meta.presentedFrames - from.frames) / (meta.mediaTime - from.mediaTime);
+      const closest = COMMON_FPS.reduce((a, b) => (Math.abs(b - fps) < Math.abs(a - fps) ? b : a));
+      const near = Math.abs(closest - fps) <= 1.5 ? closest : null;
+      if (s.fps !== (near ?? Math.round(fps))) {
+        s.fps = near ?? Math.round(fps);
+        if (s === big()) renderBar();
+      }
+      from = { s, mediaTime: meta.mediaTime, frames: meta.presentedFrames };
+    }
+    v.requestVideoFrameCallback(tick);
+  };
+  v.requestVideoFrameCallback(tick);
+}
+
+// Over the recent segments of the quality on screen (any quality until one is on screen).
+function measuredMbps(s) {
+  const same = s.rates.filter((r) => r.level === s.playingLevel);
+  const rs = same.length ? same : s.rates;
+  const seconds = rs.reduce((sum, r) => sum + r.duration, 0);
+  return seconds ? (rs.reduce((sum, r) => sum + r.bytes, 0) * 8) / seconds / 1e6 : 0;
+}
+function rateText(mbps) {
+  if (!mbps) return '';
+  return mbps >= 1 ? `${mbps.toFixed(1)} Mbps` : `${Math.round(mbps * 1000)} kbps`;
+}
 
 // "1080p", or the bitrate for a stream that doesn't say its resolution. A playlist linked
 // directly (no list of qualities) says neither.
@@ -752,10 +802,13 @@ function renderBar() {
   // The resolution on screen; with more than one quality it opens the quality menu.
   const levels = s.hls.levels ?? [];
   const playing = levels[s.playingLevel];
-  resolutionEl.textContent = v.videoHeight ? `${v.videoHeight}p` : playing ? levelName(playing) : '';
+  // e.g. "1080p60" and "6.2 Mbps"
+  resolutionEl.textContent = v.videoHeight ? `${v.videoHeight}p${s.fps || ''}` : playing ? levelName(playing) : '';
+  bitrateEl.textContent = rateText(measuredMbps(s));
   qualityWrap.hidden = !resolutionEl.textContent;
   qualityBtn.disabled = levels.length < 2;
-  qualityBtn.title = levels.length < 2 ? 'Resolution (this stream has only one quality)' : `Quality: ${s.quality < 0 ? 'Auto' : 'picked by you'}`;
+  const what = 'Resolution and frame rate on screen, and the bitrate measured over the last few segments';
+  qualityBtn.title = levels.length < 2 ? `${what}. This stream has only one quality.` : `${what}. Click to pick a quality (now: ${s.quality < 0 ? 'Auto' : 'picked by you'}).`;
   if (qualityBtn.disabled) closeQualityMenu();
   else if (!qualityMenu.hidden) fillQualityMenu(s);
 }

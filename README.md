@@ -68,7 +68,8 @@ To update later, run `git pull`, then click the reload icon (↻) on the extensi
    starts it again at once and notes it in the ⚙ menu.
 5. The bar at the bottom controls the big picture. It fades out when the mouse rests. From left
    to right: volume (**M** mutes), **LIVE** (grey when behind; click it to jump to live) or the
-   time, the resolution on screen, which opens a quality menu when the stream has more than one
+   time, what is on screen (resolution and frame rate, e.g. 1080p60, and the bitrate measured from
+   the video it downloads), which opens a quality menu when the stream has more than one
    (Auto follows your connection speed; a picked quality stays), **Pop out**, and full screen.
    **Pop out** moves the big video into a small floating window that stays on top of other
    apps; click it again (or close the floating window) to bring it back. Full screen (or **F**,

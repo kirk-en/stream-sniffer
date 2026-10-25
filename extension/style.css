@@ -71,6 +71,8 @@ body.player { background: #000; overflow: hidden; }
 .player #time { font-size: 13px; font-variant-numeric: tabular-nums; padding: 0 4px; }
 .player #bar .spacer { flex: 1; }
 .player #quality-wrap { position: relative; }
+.player #bitrate { font-weight: 400; color: #ccc; }
+.player #bitrate:not(:empty)::before { content: '·'; margin: 0 6px; }
 .player #quality-wrap[hidden] { display: none; }
 .player #quality:disabled { cursor: default; color: #fff; }
 .player #quality:disabled:hover { background: none; }
