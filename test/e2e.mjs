@@ -717,6 +717,24 @@ async function main() {
     await bad.waitForFunction(() => !/403/.test(document.getElementById('problems').textContent), { timeout: 5000 });
     ok('the × on the error dismisses it');
 
+    step('"Reopen last player" in the popup brings back the streams the player showed last');
+    const lastSession = await sw.evaluate(async () => (await chrome.storage.session.get('lastSession')).lastSession);
+    const lastUrls = await sw.evaluate(async (ids) => Object.values(await chrome.storage.session.get(ids.map((id) => `cap:${id}`))).map((c) => c.url), lastSession);
+    await page.bringToFront();
+    await ext.triggerAction(page);
+    const reopenPopup = await (await browser.waitForTarget((t) => t.url().includes('/popup.html'), { timeout: 5000 })).asPage();
+    const openBefore = new Set(browser.targets());
+    const reopenedTarget = browser.waitForTarget((t) => !openBefore.has(t) && t.url().includes('/player.html?cap='), { timeout: 5000 });
+    await reopenPopup.click('::-p-text(Reopen last player)');
+    const reopened = await (await reopenedTarget).asPage();
+    assert(
+      JSON.stringify(new URL(reopened.url()).searchParams.getAll('cap')) === JSON.stringify(lastSession),
+      `it opens a player with the last session's ${lastSession.length} stream(s)`
+    );
+    await reopened.waitForFunction((url) => document.getElementById('streams').textContent.includes(url), { timeout: 5000 }, lastUrls[0]);
+    ok(`which loads them again (${lastUrls[0]})`);
+    await reopened.close();
+
     step('The garbled playlist from earlier gives up after 3 automatic retries, and says so');
     // Its retries (5 + 15 + 30 s) have been running behind the steps since.
     const gaveUp = await waitForText(garbled, /^Stopped after 3 automatic retries: the server sent something that isn't a playlist\. Press Retry/, 60000);

@@ -985,8 +985,14 @@ async function loadSource(capId) {
   return { ...c, capId };
 }
 
+// The streams also go to session storage as the last session, for the popup's "Reopen last
+// player" after this tab is closed. Like the sources it points to, it lasts until Chrome quits
+// or the extension reloads.
 function persist() {
-  history.replaceState(null, '', `?${new URLSearchParams(streams.map((s) => ['cap', s.source.capId]))}`);
+  const caps = streams.map((s) => s.source.capId);
+  history.replaceState(null, '', `?${new URLSearchParams(caps.map((id) => ['cap', id]))}`);
+  if (!caps.length) return;
+  chrome.storage.session.set({ lastSession: caps }).catch((err) => failPage(`Couldn't save this session for reopening: ${err.message}`));
 }
 
 // Pop the big video out into Chrome's floating picture-in-picture window, or bring it back.

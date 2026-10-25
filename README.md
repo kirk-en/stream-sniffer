@@ -100,6 +100,9 @@ To update later, run `git pull`, then click the reload icon (↻) on the extensi
    until you open it).
 7. To play a URL you already have, click **Open player** at the top of the popup. Then paste the
    stream URL, plus a Referer if the server needs one.
+8. Closed the player? **Reopen last player** at the top of the popup brings back the streams it
+   showed last, until Chrome quits or the extension reloads (links with a token may have
+   expired by then).
 
 The first playlist in the list is usually the master playlist. That's the one to pick. If a page
 loads an ad or a decoy first, try the others.

@@ -339,10 +339,28 @@ function streamItem(i) {
   return li;
 }
 
+// "Reopen last player": the streams the player showed last (see persist in player.js), if their
+// saved sources are still there (they last until Chrome quits or the extension reloads).
+async function showReopen() {
+  const { lastSession = [] } = await chrome.storage.session.get('lastSession');
+  if (!lastSession.length) return;
+  const keys = lastSession.map((id) => `cap:${id}`);
+  const found = await chrome.storage.session.get(keys);
+  if (keys.some((k) => !found[k])) return;
+  const btn = document.getElementById('reopen');
+  const n = lastSession.length;
+  btn.title = `Open a player with the ${n === 1 ? 'stream' : `${n} streams`} it showed last`;
+  btn.hidden = false;
+  btn.addEventListener('click', () =>
+    chrome.tabs.create({ url: chrome.runtime.getURL(`player.html?${new URLSearchParams(lastSession.map((id) => ['cap', id]))}`) })
+  );
+}
+
 async function main() {
   document.getElementById('manual').addEventListener('click', () =>
     chrome.tabs.create({ url: chrome.runtime.getURL('player.html') })
   );
+  showReopen().catch((err) => console.error('[stream-sniffer] could not check the last session', err));
   // Header rules a closed popup left behind (it can close mid-check).
   await chrome.runtime.sendMessage({ type: 'player-reset' });
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });

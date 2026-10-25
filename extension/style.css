@@ -25,6 +25,7 @@ button.link { background: none; border: none; color: var(--accent); padding: 0; 
 /* popup */
 body.popup { width: 480px; padding: 12px; }
 .popup header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.popup header .links { display: flex; gap: 12px; }
 .popup ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .popup li { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px; display: grid; gap: 6px; }
 .popup .actions { display: flex; gap: 6px; flex-wrap: wrap; }
