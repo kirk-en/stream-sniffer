@@ -49,7 +49,14 @@ To update later, run `git pull`, then click the reload icon (↻) on the extensi
 1. Open the page with the video and press play.
 2. The Stream Sniffer icon shows a badge with the number of playlists it caught on that tab.
    Click the icon.
-3. Each playlist in the popup has these buttons:
+3. Under each playlist, the popup says what it offers, read from the playlist itself: for a
+   playlist that lists qualities, the best one's resolution and frame rate, its advertised
+   bitrate, codec, and whether it's live (e.g. `3 qualities, best 1080p60 · 6.0 Mbps advertised
+   · H.264 · live`). A playlist of a single quality doesn't say those, so it only shows whether
+   it's live. Each playlist has these buttons:
+   - **Check quality** plays the stream's best quality muted in a small preview for a few
+     seconds, then reports what it measured (e.g. `Checked: 1080p60 · 6.2 Mbps measured`). It
+     downloads a few seconds of video. The measured bitrate is the one to trust.
    - **Open in player** plays the stream in a new tab, sending the captured Referer and Origin.
    - **Add to player** adds the stream to the player tab you used last, as a small picture over
      the big one (or replaces the small one). With no player tab open, it opens one.
@@ -208,8 +215,10 @@ The player shows the relay address in its status messages, so you can confirm wh
 ```
 extension/        The Chrome extension (load this folder unpacked)
   background.js   Captures playlists and headers; manages header rules
-  popup.*         Toolbar popup listing captured streams
-  player.*        Player tab (big and small picture, ⚙ menu) and the relay fetch loop
+  popup.*         Toolbar popup listing captured streams, with what each offers and its quality check
+  player.*        Player tab (big and small picture, control bar, ⚙ menu) and the relay fetch loop
+  shared.js       hls.js loader (header hosts, disguised segments) used by the player and popup
+  disguise.js     Decodes segments disguised as images
   vendor/         hls.js and its license
 relay/
   server.mjs      The Chromecast relay (Node, no dependencies)

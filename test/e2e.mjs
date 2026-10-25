@@ -179,6 +179,24 @@ async function main() {
     const popup = await popupTarget.asPage();
     await popup.waitForSelector('::-p-text(master.m3u8)', { timeout: 5000 });
     ok('popup lists master.m3u8');
+
+    step('The popup says what each playlist offers; "Check quality" measures it');
+    // The fixture master lists one quality (320x240, 400 kbps), whose playlist is a finished video.
+    const rejectedBefore = servers.rejected.length;
+    const masterInfo = await waitForText(popup, /^1 quality: 240p · 400 kbps advertised · not live$/, 10000);
+    ok(`master playlist: "${masterInfo}"`);
+    let masterLi = null;
+    for (const li of await popup.$$('li')) {
+      if ((await li.$eval('code.url', (el) => el.textContent)).includes('master.m3u8')) masterLi = li;
+    }
+    await (await masterLi.$('button::-p-text(Check quality)')).click();
+    const checked = await waitForText(popup, /^(Checked|Couldn't check)/, 30000);
+    assert(/^Checked: 240p25 · \d+ kbps measured$/.test(checked), `check reports resolution, frame rate and measured bitrate ("${checked}")`);
+    assert(servers.rejected.length === rejectedBefore, `the CDN accepted the popup's requests (${JSON.stringify(servers.rejected.slice(rejectedBefore))})`);
+    const popupRules = await sw.evaluate(async () =>
+      (await chrome.declarativeNetRequest.getSessionRules()).filter((r) => r.condition.tabIds?.includes(chrome.tabs.TAB_ID_NONE)).length
+    );
+    assert(popupRules === 0, `the popup's header rules are gone once it's done (${popupRules} left)`);
     await popup.screenshot({ path: path.join(artifactsDir, 'popup.png') });
 
     step('The VLC command shown in the popup carries headers the CDN accepts');

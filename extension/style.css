@@ -28,6 +28,9 @@ body.popup { width: 480px; padding: 12px; }
 .popup ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .popup li { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 8px; display: grid; gap: 6px; }
 .popup .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.popup .quality { color: var(--text); }
+.popup .quality.error { color: var(--error); }
+.popup .preview video { width: 160px; aspect-ratio: 16 / 9; background: #000; border-radius: 6px; display: block; }
 .popup .cmd { color: var(--muted); max-height: 4.2em; overflow: auto; }
 
 /* player: the big video fills the tab; everything else floats over it */

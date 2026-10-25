@@ -20,80 +20,22 @@ let pageError = ''; // a problem that isn't about one stream
 const big = () => streams[0];
 const streamOf = (video) => streams.find((s) => s.video === video);
 
-const browserCodecs = {
-  inflate: (b) => decompress(b, 'deflate'),
-  gunzip: (b) => decompress(b, 'gzip'),
-};
-async function decompress(bytes, format) {
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream(format));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
-}
+const { makeLoader, snapFps, rateText } = StreamSnifferShared;
 
-// Each stream's requests can need their own Referer/Origin. The browser only applies them to
-// hosts the stream has registered with background.js, so register each host before its first
-// request.
-async function allowHost(stream, url) {
-  const host = new URL(url).hostname;
-  if (stream.hosts.has(host)) return;
-  const res = await chrome.runtime.sendMessage({ type: 'stream-host', streamId: stream.id, url });
-  if (!res?.ok) throw new Error(`Could not set up request headers for ${host}: ${res?.error ?? 'no response from background'}`);
-  stream.hosts.add(host);
-}
+// Registers a host for this stream's Referer/Origin before its first request there (see shared.js).
+const allowHost = (stream, url) => StreamSnifferShared.allowHost(stream.id, stream.hosts, url);
 
-// hls.js loader for every request of one stream: registers the host first (see allowHost), and
-// decodes image-disguised segments (see disguise.js) before the demuxer sees them. A segment
-// that's an image we can't decode fails loudly with the reason.
 function loaderFor(stream) {
-  return class extends Hls.DefaultConfig.loader {
-    load(context, config, callbacks) {
-      this.cancelled = false;
-      allowHost(stream, context.url).then(
-        () => {
-          if (!this.cancelled) super.load(context, config, unwrapping(stream, callbacks));
-        },
-        (err) => {
-          fail(stream, err.message);
-          callbacks.onError({ code: 0, text: err.message }, context, null, this.stats);
-        }
-      );
-    }
-    abort() {
-      this.cancelled = true;
-      super.abort();
-    }
-  };
-}
-
-function unwrapping(stream, callbacks) {
-  return {
-    ...callbacks,
-    onSuccess: (response, stats, ctx, details) => {
-      // A "playlist" that isn't one (an HTML error page, an empty body) fails as a load error, so
-      // hls.js retries it like any failed request. Playlist problems it skips are another matter
-      // (see hlsLogger).
-      if (typeof response.data === 'string' && !response.data.trimStart().startsWith('#EXTM3U')) {
-        const text = response.data.replace(/\s+/g, ' ').trim();
-        const sent = text ? `"${text.slice(0, 200)}${text.length > 200 ? '…' : ''}"` : 'an empty body';
-        return callbacks.onError({ code: response.code, text: `not a playlist (no #EXTM3U); server sent ${sent}` }, ctx, details, stats);
+  return makeLoader({
+    allowHost: (url) => allowHost(stream, url),
+    onDisguised: () => {
+      if (stream.unwrapped++ === 0) {
+        stream.status += ' · segments are disguised as images; decoding them';
+        render();
       }
-      const bytes = response.data instanceof ArrayBuffer ? new Uint8Array(response.data) : null;
-      if (!bytes || !StreamSnifferDisguise.isPng(bytes)) return callbacks.onSuccess(response, stats, ctx, details);
-      StreamSnifferDisguise.decodeDisguisedSegment(bytes, browserCodecs).then(
-        (ts) => {
-          response.data = ts.buffer.slice(ts.byteOffset, ts.byteOffset + ts.byteLength);
-          if (stream.unwrapped++ === 0) {
-            stream.status += ' · segments are disguised as images; decoding them';
-            render();
-          }
-          callbacks.onSuccess(response, stats, ctx, details);
-        },
-        (err) => {
-          fail(stream, `Couldn't decode a segment: ${err.message}`);
-          callbacks.onError({ code: 0, text: err.message }, ctx, details, stats);
-        }
-      );
     },
-  };
+    onFail: (msg) => fail(stream, msg),
+  });
 }
 
 // Some live CDNs put a fresh token in segment paths on every playlist refresh. hls.js calls
@@ -220,7 +162,8 @@ async function startStream(source, slot) {
   // own figure is only a claim, and a playlist linked directly has none.
   hls.on(Hls.Events.FRAG_LOADED, (_e, { frag, payload }) => {
     if (frag.type !== 'main' || !(frag.duration > 0)) return;
-    // payload is after any unwrapping (see unwrapping), so a disguised segment counts as video.
+    // payload is after any unwrapping (see makeLoader in shared.js), so a disguised segment
+    // counts as video.
     stream.rates.push({ level: frag.level, bytes: payload?.byteLength || frag.stats.total, duration: frag.duration });
     if (stream.rates.length > 8) stream.rates.shift();
     if (stream === big()) renderBar();
@@ -503,10 +446,9 @@ navigator.mediaSession.setActionHandler('play', () => {
   }
 });
 
-// Frame rate, counted as frames are shown: frames per second of video over each 2 s stretch.
-// Snapped to the usual rates, since a count over 2 s wobbles by a frame or so. Frames dropped
-// because the computer can't keep up aren't shown, so they lower it, as they should.
-const COMMON_FPS = [24, 25, 30, 48, 50, 60, 120];
+// Frame rate, counted as frames are shown: frames per second of video over each 2 s stretch,
+// snapped to the usual rates. Frames dropped because the computer can't keep up aren't shown,
+// so they lower it, as they should.
 function countFrames(v) {
   let from = null; // { s, mediaTime, frames }
   const tick = (_now, meta) => {
@@ -514,11 +456,9 @@ function countFrames(v) {
     if (!s || !from || from.s !== s || meta.mediaTime < from.mediaTime) {
       from = s && { s, mediaTime: meta.mediaTime, frames: meta.presentedFrames };
     } else if (meta.mediaTime - from.mediaTime >= 2) {
-      const fps = (meta.presentedFrames - from.frames) / (meta.mediaTime - from.mediaTime);
-      const closest = COMMON_FPS.reduce((a, b) => (Math.abs(b - fps) < Math.abs(a - fps) ? b : a));
-      const near = Math.abs(closest - fps) <= 1.5 ? closest : null;
-      if (s.fps !== (near ?? Math.round(fps))) {
-        s.fps = near ?? Math.round(fps);
+      const fps = snapFps((meta.presentedFrames - from.frames) / (meta.mediaTime - from.mediaTime));
+      if (s.fps !== fps) {
+        s.fps = fps;
         if (s === big()) renderBar();
       }
       from = { s, mediaTime: meta.mediaTime, frames: meta.presentedFrames };
@@ -534,10 +474,6 @@ function measuredMbps(s) {
   const rs = same.length ? same : s.rates;
   const seconds = rs.reduce((sum, r) => sum + r.duration, 0);
   return seconds ? (rs.reduce((sum, r) => sum + r.bytes, 0) * 8) / seconds / 1e6 : 0;
-}
-function rateText(mbps) {
-  if (!mbps) return '';
-  return mbps >= 1 ? `${mbps.toFixed(1)} Mbps` : `${Math.round(mbps * 1000)} kbps`;
 }
 
 // "1080p", or the bitrate for a stream that doesn't say its resolution. A playlist linked
