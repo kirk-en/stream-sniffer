@@ -683,6 +683,12 @@ async function main() {
     const expiredMsg = await waitForText(bad, /probably expired/);
     ok(`a refused link isn't retried by itself, and says why: "${expiredMsg.slice(-110)}"`);
     const refusedSoFar = servers.rejected.length;
+    // Clicking a message copies it. (The test browser's clipboard is stubbed to see what was sent.)
+    await bad.evaluate(() => (navigator.clipboard.writeText = async (t) => void (window.copiedText = t)));
+    await bad.click('#problems p.error .text');
+    await bad.waitForSelector('#problems .copied', { timeout: 3000 });
+    const copied = await bad.evaluate(() => window.copiedText);
+    assert(/probably expired.*403/.test(copied), `clicking the message copies it, and says so ("${copied.slice(0, 60)}…")`);
     await bad.click('#problems p.error .retry');
     for (let i = 0; i < 50 && servers.rejected.length === refusedSoFar; i++) await new Promise((r) => setTimeout(r, 200));
     assert(servers.rejected.length > refusedSoFar, 'Retry asks the server again (which refuses again: the link is bad)');

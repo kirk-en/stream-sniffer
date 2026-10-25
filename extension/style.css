@@ -103,6 +103,10 @@ body.player { background: #000; overflow: hidden; }
 }
 .player .retry { justify-self: start; padding: 2px 10px; font-size: 12px; }
 .player #problems .retry { pointer-events: auto; flex: none; }
+/* The text copies on click; the rest of the box lets clicks through to the video. */
+.player #problems .text { pointer-events: auto; cursor: copy; }
+.player #problems .copied { flex: none; color: #5bd27a; }
+.player #problems .copy-failed { flex: none; color: var(--error); }
 .player #problems .dismiss:hover { color: var(--text); border-color: var(--border); }
 .player .warn { color: var(--warn, #f0b429); }
 .player #problems .ok { color: #5bd27a; }

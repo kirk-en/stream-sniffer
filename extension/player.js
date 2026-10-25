@@ -760,11 +760,30 @@ function retryButton(streamId) {
   b.addEventListener('click', () => retryById(streamId));
   return b;
 }
+// A short note after a message's text, gone after 1.5 s.
+function flashNote(after, text, cls) {
+  after.parentElement?.querySelector('.copied, .copy-failed')?.remove();
+  const note = document.createElement('span');
+  note.className = cls;
+  note.textContent = text;
+  after.after(note);
+  setTimeout(() => note.remove(), 1500);
+}
+
 function problemLine({ cls, text, key, retryId }) {
   const p = document.createElement('p');
   p.className = cls;
   const span = document.createElement('span');
+  span.className = 'text';
   span.textContent = text;
+  // A click copies the message as it reads now (a countdown updates it in place).
+  span.title = 'Click to copy';
+  span.addEventListener('click', () => {
+    navigator.clipboard.writeText(span.textContent).then(
+      () => flashNote(span, 'Copied', 'copied'),
+      (err) => flashNote(span, `Couldn't copy: ${err.message}`, 'copy-failed')
+    );
+  });
   const close = document.createElement('button');
   close.type = 'button';
   close.className = 'dismiss';
