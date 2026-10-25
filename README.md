@@ -58,10 +58,11 @@ To update later, run `git pull`, then click the reload icon (↻) on the extensi
      It's useful for testing what a stream server accepts.
    - **Copy URL** copies the playlist address.
 4. The player fills the tab with the video. With two streams, the second floats in a corner;
-   click it to swap the two pictures. Drag it to move it, or drag a corner to resize it; the
-   player remembers where you put it. Click its **×** to remove it. The sound always follows
-   the big picture. Each stream
-   gets its own Referer and Origin, so the two can come from different sites. Problems
+   click it (or press **S**) to swap the two pictures. Drag it to move it, or drag a corner to
+   resize it; the player remembers where you put it. Click its **–** (or press **H**) to hide it
+   while its stream keeps playing; **S** still swaps, and **Show small picture** in the bar
+   brings it back. Click its **×** to remove it. The sound always follows the big picture. Each
+   stream gets its own Referer and Origin, so the two can come from different sites. Problems
    (errors, buffering, failed requests the player is retrying) show over the video while they
    last. Live streams just play: if a video pauses (a media key, or Chrome itself), the player
    starts it again at once and notes it in the ⚙ menu.

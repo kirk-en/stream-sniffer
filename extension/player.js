@@ -4,6 +4,8 @@ const streamsEl = document.getElementById('streams');
 const menu = document.getElementById('menu');
 const settingsBtn = document.getElementById('settings');
 const removeSmallBtn = document.getElementById('remove-small');
+const hideSmallBtn = document.getElementById('hide-small');
+const showSmallBtn = document.getElementById('show-small');
 const castStatus = document.getElementById('cast-status');
 const resolutionEl = document.getElementById('resolution');
 const params = new URLSearchParams(location.search);
@@ -303,20 +305,35 @@ function layout() {
     v.classList.toggle('big', i === 0);
     v.classList.toggle('small', i > 0);
     v.hidden = i === -1 || streams[i].casting;
+    v.classList.toggle('tucked', i > 0 && smallHidden);
     v.removeAttribute('style'); // the big one fills the tab; the small one is placed below
     if (i > 0) placeSmall(v);
   }
   placeRemoveBtn();
 }
 
-// The × sits inside the small picture's top-right, clear of the corner that resizes it.
+// The – and × sit inside the small picture's top-right, clear of the corner that resizes it.
 function placeRemoveBtn() {
   const small = streams[1];
-  removeSmallBtn.hidden = !small || small.casting;
+  removeSmallBtn.hidden = hideSmallBtn.hidden = !small || small.casting || smallHidden;
   if (removeSmallBtn.hidden) return;
   const r = small.video.getBoundingClientRect();
   Object.assign(removeSmallBtn.style, { left: `${r.right - CORNER - 30}px`, top: `${r.top + 6}px` });
+  Object.assign(hideSmallBtn.style, { left: `${r.right - CORNER - 58}px`, top: `${r.top + 6}px` });
 }
+
+// The small picture can be hidden while its stream keeps playing. Swapping still works: the
+// stream swapped out becomes the hidden one. The bar's "Show small picture" (or H) brings it
+// back. Remembered, like its place, so a reload keeps it hidden.
+let smallHidden = false;
+function setSmallHidden(hide) {
+  smallHidden = hide;
+  layout();
+  render();
+  chrome.storage.local.set({ smallHidden }).catch((err) => failPage(`Couldn't save whether the small picture is hidden: ${err.message}`));
+}
+hideSmallBtn.addEventListener('click', () => setSmallHidden(true));
+showSmallBtn.addEventListener('click', () => setSmallHidden(false));
 removeSmallBtn.addEventListener('click', async () => {
   const s = streams[1];
   if (!s) return;
@@ -335,10 +352,12 @@ const MIN_WIDTH = 160;
 const DRAG_THRESHOLD = 4; // px of movement before a press counts as a drag, not a click
 let smallBox = null; // { x, y, w } in px
 chrome.storage.local
-  .get('smallBox')
-  .then(({ smallBox: saved }) => {
+  .get(['smallBox', 'smallHidden'])
+  .then(({ smallBox: saved, smallHidden: hidden }) => {
     if (saved) smallBox = saved;
+    smallHidden = !!hidden;
     layout();
+    render();
   })
   .catch((err) => failPage(`Couldn't read the small window's saved place: ${err.message}`));
 
@@ -556,7 +575,14 @@ function render() {
 
   // Rebuilt only when its text changes, so a link isn't swapped out from under a click.
   const entries = streams.map((s, i) => ({
-    heading: streams.length > 1 ? (i === 0 ? 'Big screen' : 'Small screen (click it to swap)') : 'Now playing',
+    heading:
+      streams.length < 2
+        ? 'Now playing'
+        : i === 0
+          ? 'Big screen'
+          : smallHidden
+            ? 'Small screen, hidden (press S to swap, H to show it)'
+            : 'Small screen (click it or press S to swap)',
     pageUrl: s.source.pageUrl,
     pageTitle: s.source.pageTitle,
     status: [
@@ -704,6 +730,7 @@ function renderBar() {
   // Live streams just play (see the 'pause' listener), so there's no pause button; play shows
   // only for a video that stopped and needs a press to start again.
   playBtn.hidden = !v.paused;
+  showSmallBtn.hidden = !(smallHidden && streams[1] && !streams[1].casting);
   const silent = v.muted || v.volume === 0;
   setIcon(muteBtn, silent ? 'muted' : 'volume');
   muteBtn.ariaLabel = silent ? 'Unmute' : 'Mute';
@@ -831,13 +858,17 @@ document.addEventListener('fullscreenchange', () => {
   fullscreenBtn.title = on ? 'Exit full screen (F or Esc)' : 'Full screen (F, or double-click the video)';
 });
 
-// F: full screen. M: mute. Esc: close the quality menu. Not while typing in the form.
+// F: full screen. M: mute. S: swap the big and small pictures. H: hide or show the small one.
+// Esc: close the quality menu.
+// Not while typing in the form.
 addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey || e.target.closest('input:not([type=range]), select, textarea')) return;
   const key = e.key.toLowerCase();
   if (key === 'escape') return closeQualityMenu();
   if (key === 'f') toggleFullscreen();
   else if (key === 'm') toggleMute();
+  else if (key === 's' && streams.length > 1) swap();
+  else if (key === 'h' && streams.length > 1) setSmallHidden(!smallHidden);
   else return;
   e.preventDefault();
 });
@@ -864,7 +895,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg.tabId !== id) return;
     try {
       const source = await loadSource(msg.capId);
-      await startStream(source, Math.min(streams.length, MAX_STREAMS - 1));
+      const slot = Math.min(streams.length, MAX_STREAMS - 1);
+      if (slot === 1 && smallHidden) setSmallHidden(false); // a stream just added should be seen
+      await startStream(source, slot);
       sendResponse({ ok: true });
     } catch (err) {
       failPage(err.message);

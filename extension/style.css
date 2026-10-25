@@ -40,11 +40,13 @@ body.player { background: #000; overflow: hidden; }
   touch-action: none; /* drags move it instead of scrolling */
   box-sizing: border-box; /* the width set while resizing includes the border */
 }
-.player #remove-small {
+/* Hidden by the – button: it keeps playing, just out of sight. */
+.player video.small.tucked { visibility: hidden; pointer-events: none; }
+.player #remove-small, .player #hide-small {
   position: fixed; z-index: 2; width: 24px; height: 24px; padding: 0; border-radius: 50%;
   font-size: 16px; line-height: 1; background: rgba(0, 0, 0, 0.7); opacity: 0.8;
 }
-.player #remove-small:hover { opacity: 1; }
+.player #remove-small:hover, .player #hide-small:hover { opacity: 1; }
 /* The control bar: white icons on a dark fade, like Chrome's own video controls. */
 .player #bar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 2; height: 56px; box-sizing: border-box;
@@ -60,7 +62,7 @@ body.player { background: #000; overflow: hidden; }
 .player #bar .icon { width: 40px; height: 40px; padding: 8px; display: grid; place-items: center; }
 .player #bar svg { width: 24px; height: 24px; fill: currentColor; display: block; }
 .player #volume { width: 80px; accent-color: #fff; margin: 0 6px 0 2px; }
-.player #live, .player #quality { border-radius: 4px; padding: 4px 8px; font-weight: 600; font-size: 13px; }
+.player #live, .player #quality, .player #show-small { border-radius: 4px; padding: 4px 8px; font-weight: 600; font-size: 13px; }
 .player #live[hidden] { display: none; }
 .player #live::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: #888; vertical-align: 1px; }
 .player #live.at-edge::before { background: #ff4e45; }

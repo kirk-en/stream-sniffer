@@ -11,8 +11,9 @@
   <!-- No Chrome controls: the page can't add to them, and their fullscreen shows only the video
        (hiding the small picture and messages). #bar replaces them. -->
   <video class="big" playsinline></video>
-  <video class="small" playsinline hidden title="Click to swap with the big picture. Drag to move; drag a corner to resize."></video>
+  <video class="small" playsinline hidden title="Click (or press S) to swap with the big picture. Drag to move; drag a corner to resize."></video>
   <!-- Follows the small picture around (a video element can't hold children). -->
+  <button id="hide-small" type="button" hidden aria-label="Hide the small picture" title="Hide the small picture; it keeps playing (H)">–</button>
   <button id="remove-small" type="button" hidden aria-label="Remove the small stream" title="Remove the small stream">×</button>
 
   <!-- The big picture's controls. Fades out, like Chrome's, once the mouse rests. -->
@@ -23,6 +24,7 @@
     <button id="live" type="button" title="Jump to live"></button>
     <span id="time"></span>
     <span class="spacer"></span>
+    <button id="show-small" type="button" hidden title="Show the small picture again (H)">Show small picture</button>
     <div id="quality-wrap">
       <button id="quality" type="button" aria-haspopup="menu" aria-expanded="false" title="Quality"><span id="resolution"></span></button>
       <div id="quality-menu" role="menu" hidden></div>

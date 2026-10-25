@@ -293,6 +293,32 @@ async function main() {
     await bigEl.click(); // bigEl is the small one now
     [a, b] = await sizes();
     assert(a.area > b.area * 4, 'clicking again swaps back');
+    await player.keyboard.press('s');
+    [a, b] = await sizes();
+    assert(b.area > a.area * 4 && !b.muted && a.muted, 'S swaps them too, sound included');
+    await player.keyboard.press('s');
+    [a, b] = await sizes();
+    assert(a.area > b.area * 4, 'and S again swaps back');
+
+    // Hiding the small picture keeps its stream playing, and S still swaps.
+    const smallState = () =>
+      player.$eval('video.small', (v) => ({ shown: v.checkVisibility({ visibilityProperty: true }), t: v.currentTime, muted: v.muted }));
+    const bigSrc = await player.$eval('video.big', (v) => v.src);
+    await player.click('::-p-aria(Hide the small picture)');
+    const tucked = await smallState();
+    assert(!tucked.shown, 'the – on the small picture hides it');
+    await player.waitForFunction((t) => document.querySelector('video.small').currentTime >= t + 1, { timeout: 5000, polling: 250 }, tucked.t);
+    ok('its stream keeps playing while hidden');
+    await player.keyboard.press('s');
+    assert((await player.$eval('video.big', (v) => v.src)) !== bigSrc, 'S still swaps while it is hidden');
+    assert(!(await smallState()).shown && (await smallState()).muted, 'and the stream swapped out is the hidden, muted one');
+    await player.keyboard.press('s');
+    await player.click('::-p-aria(Show small picture)');
+    assert((await smallState()).shown, '"Show small picture" in the bar brings it back');
+    await player.keyboard.press('h');
+    assert(!(await smallState()).shown, 'H hides it');
+    await player.keyboard.press('h');
+    assert((await smallState()).shown, 'and H shows it again');
 
     const smallRect = () =>
       player.$$eval('video', (vs) => {
