@@ -56,7 +56,7 @@ async function addToPlayer(c) {
 // rule of its own; see background.js) and reports what it says. A playlist listing qualities
 // says their resolution, often frame rate, and an advertised bitrate; a playlist of a single
 // quality says none of that, so "Check quality" plays it unseen for a few seconds to measure.
-const { allowHost, makeLoader, snapFps, rateText } = StreamSnifferShared;
+const { allowHost, makeLoader, snapFps, rateText, codecName } = StreamSnifferShared;
 
 async function withHeaders(c, fn) {
   const streamId = crypto.randomUUID();
@@ -100,15 +100,6 @@ function parsePlaylist(text, baseUrl) {
     });
   });
   return { variants: variants.sort((a, b) => b.bandwidth - a.bandwidth), live: !/^#EXT-X-ENDLIST/m.test(text) };
-}
-
-function codecName(codecs) {
-  const video = codecs.split(',').map((c) => c.trim());
-  if (video.some((c) => /^(hvc1|hev1)/.test(c))) return 'HEVC';
-  if (video.some((c) => /^av01/.test(c))) return 'AV1';
-  if (video.some((c) => /^vp0?9/.test(c))) return 'VP9';
-  if (video.some((c) => /^avc/.test(c))) return 'H.264';
-  return '';
 }
 
 const quality = (height, fps) => (height ? `${height}p${fps ? snapFps(fps) : ''}` : 'resolution not listed');

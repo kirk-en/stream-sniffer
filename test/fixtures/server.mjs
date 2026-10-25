@@ -210,7 +210,8 @@ index.m3u8?token=${TOKEN}
       );
     }
     const png = url.pathname.startsWith('/live/png/');
-    const dir = url.pathname.startsWith('/live/multi/hi/') ? path.join(streamDir, 'hi') : streamDir;
+    const sub = url.pathname.match(/^\/live\/(?:multi\/(hi)|(jitter))\//);
+    const dir = sub ? path.join(streamDir, sub[1] ?? sub[2]) : streamDir;
     const file = path.join(dir, path.basename(url.pathname));
     if (!url.pathname.startsWith('/live/') || !fs.existsSync(file)) {
       res.writeHead(404);

@@ -32,12 +32,18 @@ function assert(cond, msg) {
   ok(msg);
 }
 
-// The test video, and a 1280x720 copy (hi/) for the stream with two quality levels.
+// The test video; a 1280x720 copy (hi/) for the stream with two quality levels; and a copy
+// with uneven frame timestamps (jitter/): every fourth frame 0.45 of a frame late, as relayed
+// re-streams often have.
 function ensureStream() {
   makeStream(streamDir, '320x240');
   makeStream(path.join(streamDir, 'hi'), '1280x720');
+  makeStream(path.join(streamDir, 'jitter'), '320x240', [
+    '-vf', "settb=1/90000,setpts='(N+if(eq(mod(N\\,4)\\,1)\\,0.45\\,0))/25/TB'",
+    '-fps_mode', 'passthrough', '-enc_time_base', '1/90000', '-bf', '0',
+  ]);
 }
-function makeStream(dir, size) {
+function makeStream(dir, size, videoArgs = []) {
   if (fs.existsSync(path.join(dir, 'index.m3u8'))) return;
   step(`Generating ${size} test HLS stream with ffmpeg`);
   fs.mkdirSync(dir, { recursive: true });
@@ -48,6 +54,7 @@ function makeStream(dir, size) {
       '-f', 'lavfi', '-i', `testsrc=size=${size}:rate=25`,
       '-f', 'lavfi', '-i', 'sine=frequency=440',
       '-t', '20',
+      ...videoArgs,
       '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-g', '50',
       '-c:a', 'aac',
       '-f', 'hls', '-hls_time', '2', '-hls_playlist_type', 'vod',
@@ -533,7 +540,7 @@ async function main() {
     await manual.evaluate(() => (streams[0].gapFrames += 5));
     const framesMsg = await waitForText(manual, /Frames in the last 10 s: .*\d+ missing from the stream itself/, 5000);
     ok(`over the video: "${framesMsg.slice(0, 120)}"`);
-    const framesTotal = await waitForText(manual, /frames so far: \d+ dropped by this computer, \d+ missing from the stream/, 5000);
+    const framesTotal = await waitForText(manual, /frames so far: \d+ skipped by Chrome's video player, \d+ missing from the stream/, 5000);
     ok(`in the menu: "${framesTotal.match(/frames so far[^·]*/)[0]}"`);
     const framesShowing = () => manual.$eval('#problems', (e) => /Frames in the last 10 s/.test(e.textContent));
     await manual.click('#frame-warnings'); // the menu's switch: off
@@ -574,6 +581,19 @@ async function main() {
     await waitForPlayback(multi, 'two-level stream after switching up', lockedT + 1, 10000);
     ok('picking 720p switches up, and playback goes on');
     await multi.close();
+
+    step('A stream with uneven frame timestamps is called out; the menu says how it is decoded');
+    const jitter = await browser.newPage();
+    await jitter.goto(`chrome-extension://${ext.id}/player.html`);
+    await jitter.type('input[name=url]', MASTER_URL.replace('/live/master.m3u8', '/live/jitter/index.m3u8'));
+    await jitter.type('input[name=referer]', EMBED + '/');
+    await jitter.click('button::-p-text(Play)');
+    const unevenNote = await waitForText(jitter, /frame timing uneven: \d+% of frames off their beat/, 15000);
+    ok(`menu: "${unevenNote.match(/frame timing uneven[^·]*/)[0].trim()}"`);
+    assert(/H\.264, (hardware decoding available|no hardware decoding)/.test(unevenNote), `and how it's decoded: "${unevenNote.match(/H\.264[^·]*/)?.[0]}"`);
+    // The test video's even copy isn't called out.
+    assert(!(await manual.$eval('#streams', (e) => /frame timing uneven/.test(e.textContent))), 'an even stream is not called out');
+    await jitter.close();
 
     step('A playlist linked directly (no list of qualities) still shows the real resolution');
     const direct = await browser.newPage();

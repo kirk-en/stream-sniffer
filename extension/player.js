@@ -20,7 +20,7 @@ let pageError = ''; // a problem that isn't about one stream
 const big = () => streams[0];
 const streamOf = (video) => streams.find((s) => s.video === video);
 
-const { makeLoader, snapFps, rateText, COMMON_FPS } = StreamSnifferShared;
+const { makeLoader, snapFps, rateText, codecName, COMMON_FPS } = StreamSnifferShared;
 
 // Registers a host for this stream's Referer/Origin before its first request there (see shared.js).
 const allowHost = (stream, url) => StreamSnifferShared.allowHost(stream.id, stream.hosts, url);
@@ -130,6 +130,9 @@ async function startStream(source, slot, { retries = 0, lastReason = '', manual 
     missingTotal: 0,
     droppedSeen: null, // the video's dropped-frame count at the last check
     gapFrames: 0, // frames skipped in the video's timeline since the last check (see countFrames)
+    uneven: 0, // share of frames off the stream's beat (uneven timestamps; see countFrames)
+    codec: '', // e.g. "avc1.640028", once the first segment says
+    hardware: null, // whether the browser can decode it in hardware (see checkHardware)
   };
   streams[slot] = stream;
   pageError = '';
@@ -257,6 +260,13 @@ async function startStream(source, slot, { retries = 0, lastReason = '', manual 
     render();
   });
   hls.on(Hls.Events.LEVELS_UPDATED, () => render());
+  hls.on(Hls.Events.BUFFER_CODECS, (_e, tracks) => {
+    const video = tracks.video ?? tracks.audiovideo;
+    if (!video?.codec || video.codec === stream.codec) return;
+    stream.codec = video.codec;
+    stream.codecContainer = video.container;
+    checkHardware(stream);
+  });
   hls.loadSource(source.url);
   hls.attachMedia(video);
 }
@@ -528,7 +538,10 @@ for (const v of videos) {
     render();
     v.play().catch((err) => fail(s, `Couldn't resume after a pause: video.play() failed: ${err.message}`));
   });
-  v.addEventListener('resize', render); // the picture's size changed: the quality readout follows
+  v.addEventListener('resize', () => {
+    render(); // the quality readout follows
+    if (streamOf(v)) checkHardware(streamOf(v));
+  });
   countFrames(v);
   for (const e of ['play', 'pause', 'volumechange', 'timeupdate', 'durationchange']) {
     v.addEventListener(e, () => streamOf(v) === big() && renderBar());
@@ -583,11 +596,17 @@ function countFrames(v) {
     }
     last = s && { s, mediaTime: meta.mediaTime, frames: meta.presentedFrames };
     if (gaps.length >= 60) {
-      const fps = snapFps(1 / gaps.sort((a, b) => a - b)[gaps.length >> 1]);
+      const beat = gaps.slice().sort((a, b) => a - b)[gaps.length >> 1];
+      const fps = snapFps(1 / beat);
+      // Off the beat: a gap that isn't a whole number of frames (bunched frames, or a late one).
+      // Whole multiples are frames that weren't shown, counted elsewhere.
+      const offBeat = gaps.filter((g) => Math.abs(g / beat - Math.round(g / beat)) > 0.25 || g / beat < 0.75).length;
+      const uneven = offBeat / gaps.length;
       gaps = [];
-      if (s.fps !== fps) {
+      if (s.fps !== fps || s.uneven !== uneven) {
         s.fps = fps;
-        if (s === big()) renderBar();
+        s.uneven = uneven;
+        render(); // the bar, and the menu's timing note
       }
     }
     v.requestVideoFrameCallback(tick);
@@ -595,9 +614,10 @@ function countFrames(v) {
   v.requestVideoFrameCallback(tick);
 }
 
-// Every second, for each picture on screen: frames the computer dropped (decoded too late to
-// show, counted by the browser) and frames missing from the stream itself (timeline gaps the
-// computer didn't account for). The last 10 s of them show over the video; totals in the menu.
+// Every second, for each picture on screen: frames Chrome's video player skipped (decoded but
+// never shown, as the browser counts them; see skipReason) and frames missing from the stream
+// itself (timeline gaps the player didn't account for). The last 10 s of them show over the
+// video; totals in the menu.
 const FRAME_WINDOW_MS = 10000;
 setInterval(() => {
   let changed = false;
@@ -626,13 +646,56 @@ function framesWarning(s) {
   const dropped = s.frameEvents.reduce((n, e) => n + e.dropped, 0);
   const missing = s.frameEvents.reduce((n, e) => n + e.missing, 0);
   if (!dropped && !missing) return '';
-  const two = streams.length > 1 ? '; two streams are playing, which takes more decoding' : '';
   const parts = [
-    dropped && `${dropped} dropped by this computer (it couldn't decode or draw them in time${two})`,
+    dropped && `${dropped} skipped by Chrome's video player (${skipReason(s)})`,
     missing && `${missing} missing from the stream itself (the source skipped them)`,
   ].filter(Boolean);
   const cadence = cadenceNote(s);
   return `Frames in the last 10 s: ${parts.join(' · ')}${cadence ? ` · ${cadence}` : ''}`;
+}
+
+// Why Chrome skipped frames: it shows each one when its timestamp says, in step with the sound,
+// and skips any that land late. Uneven timestamps in the stream make some land late however fast
+// the computer is; otherwise it's decoding that couldn't keep up.
+const UNEVEN = 0.05; // off-beat share above which a stream's timing counts as uneven
+function skipReason(s) {
+  if (s.uneven >= UNEVEN) {
+    return `the stream's frame timing is uneven, ${Math.round(s.uneven * 100)}% of frames off their beat, so some land late; that's the stream, not your computer`;
+  }
+  if (s.hardware === false) return 'late for their slot; this format has no hardware decoding here, so the processor decodes it';
+  return `late for their slot, or decoding couldn't keep up${streams.length > 1 ? '; two streams are playing' : ''}`;
+}
+
+// Whether the browser can decode the stream's video format in hardware (its own answer:
+// "power efficient" means a hardware decoder). Asked once the format and size are known.
+async function checkHardware(s) {
+  if (!s.codec || !s.codecContainer || !navigator.mediaCapabilities) return;
+  const v = s.video;
+  try {
+    const info = await navigator.mediaCapabilities.decodingInfo({
+      type: 'media-source',
+      video: {
+        contentType: `${s.codecContainer}; codecs="${s.codec}"`,
+        width: v.videoWidth || 1920,
+        height: v.videoHeight || 1080,
+        bitrate: Math.round(measuredMbps(s) * 1e6) || 8e6,
+        framerate: s.fps || 60,
+      },
+    });
+    s.hardware = info.supported ? info.powerEfficient : false;
+  } catch (err) {
+    console.warn('[stream-sniffer] could not ask about hardware decoding:', err);
+    s.hardware = null;
+  }
+  render();
+}
+
+// e.g. "H.264, hardware decoding available"
+function decodingText(s) {
+  if (!s.codec) return '';
+  const name = codecName(s.codec) || s.codec;
+  if (s.hardware == null) return name;
+  return `${name}, ${s.hardware ? 'hardware decoding available' : 'no hardware decoding for this format: the processor decodes it'}`;
 }
 
 // The display's refresh rate, from the browser's own frame timing (the median gap over 2 s,
@@ -850,7 +913,9 @@ function render() {
       s.skipped && `hls.js skipped ${s.skipped} playlist problem${s.skipped === 1 ? '' : 's'} (last ${s.lastSkipped})`,
       s.resumes && `resumed after ${s.resumes} pause${s.resumes === 1 ? '' : 's'} (last ${s.lastResume})`,
       (s.droppedTotal || s.missingTotal) &&
-        `frames so far: ${s.droppedTotal} dropped by this computer, ${s.missingTotal} missing from the stream`,
+        `frames so far: ${s.droppedTotal} skipped by Chrome's video player, ${s.missingTotal} missing from the stream`,
+      s.uneven >= UNEVEN && `frame timing uneven: ${Math.round(s.uneven * 100)}% of frames off their beat`,
+      decodingText(s),
       cadenceNote(s),
       ignoredPauses && `ignored ${ignoredPauses} pause request${ignoredPauses === 1 ? '' : 's'} from Chrome's media controls (last ${lastIgnoredPause})`,
     ]

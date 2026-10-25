@@ -79,11 +79,21 @@
     return Math.abs(closest - fps) <= 1.5 ? closest : Math.round(fps);
   }
 
+  // A video format's common name from its codec string(s), e.g. "avc1.640028" -> "H.264".
+  function codecName(codecs) {
+    const list = codecs.split(',').map((c) => c.trim());
+    if (list.some((c) => /^(hvc1|hev1)/.test(c))) return 'HEVC';
+    if (list.some((c) => /^av01/.test(c))) return 'AV1';
+    if (list.some((c) => /^vp0?9/.test(c))) return 'VP9';
+    if (list.some((c) => /^avc/.test(c))) return 'H.264';
+    return '';
+  }
+
   // "6.2 Mbps", or "850 kbps" under 1 Mbps.
   function rateText(mbps) {
     if (!mbps) return '';
     return mbps >= 1 ? `${mbps.toFixed(1)} Mbps` : `${Math.round(mbps * 1000)} kbps`;
   }
 
-  globalThis.StreamSnifferShared = { allowHost, makeLoader, snapFps, rateText, COMMON_FPS };
+  globalThis.StreamSnifferShared = { allowHost, makeLoader, snapFps, rateText, codecName, COMMON_FPS };
 })();
