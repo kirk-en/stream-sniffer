@@ -104,9 +104,18 @@ async function waitForText(page, re, timeoutMs = 10000) {
   return handle.jsonValue();
 }
 
+// Reports a fatal network error on the page's big stream, as hls.js does once its own retries
+// of a segment give up.
+const failSegment = (page) =>
+  page.evaluate(() =>
+    streams[0].hls.trigger(Hls.Events.ERROR, { type: Hls.ErrorTypes.NETWORK_ERROR, details: Hls.ErrorDetails.FRAG_LOAD_ERROR, fatal: true })
+  );
+
 // Unfolds "Play a URL" in the player's menu, where casting is (if it isn't already), and clicks
 // Start casting.
 async function startCasting(page) {
+  // Clicks wait for the page to draw a frame, which a background tab doesn't.
+  await page.bringToFront();
   if (!(await page.$eval('#play-url', (d) => d.open))) await page.click('#play-url summary');
   await page.click('button::-p-text(Start casting)');
 }
@@ -551,6 +560,25 @@ async function main() {
     await manual.waitForFunction(() => /Frames in the last 10 s/.test(document.getElementById('problems').textContent), { timeout: 3000 });
     assert(await framesShowing(), 'and on again');
 
+    step("An older message doesn't stop the automatic retries; Retry pressed twice starts the stream once");
+    await manual.evaluate(() => (streams[0].error = 'An older, unrelated message'));
+    await failSegment(manual);
+    await waitForText(manual, /Retrying in \d+ s \(try 1 of 3\)/, 5000);
+    ok('the retry countdown starts anyway');
+    const manualTab = await manual.evaluate(async () => (await chrome.tabs.getCurrent()).id);
+    const oldId = await manual.evaluate(() => streams[0].id);
+    // Retry over the video and Retry in the menu, at once.
+    await manual.evaluate(() => {
+      document.querySelector('#problems .retry').click();
+      document.querySelector('#streams .retry').click();
+    });
+    await manual.waitForFunction((id) => streams[0].id !== id && streams[0].video.currentTime > 1, { timeout: 15000 }, oldId);
+    const tabRules = await sw.evaluate(
+      async (id) => (await chrome.declarativeNetRequest.getSessionRules()).filter((r) => r.condition.tabIds?.includes(id)).length,
+      manualTab
+    );
+    assert(tabRules === 1, `it plays again as one stream (header rules for the tab: ${tabRules})`);
+
     step('A stream with two quality levels says which one is on screen, and the menu can lock one');
     const multi = await browser.newPage();
     await multi.goto(`chrome-extension://${ext.id}/player.html`);
@@ -581,6 +609,11 @@ async function main() {
     const lockedT = await multi.evaluate(() => document.querySelector('video').currentTime);
     await waitForPlayback(multi, 'two-level stream after switching up', lockedT + 1, 10000);
     ok('picking 720p switches up, and playback goes on');
+    const beforeDrop = await multi.evaluate(() => streams[0].id);
+    await failSegment(multi);
+    await multi.waitForFunction((id) => streams[0].id !== id && streams[0].video.currentTime > 1, { timeout: 20000 }, beforeDrop);
+    const kept = await multi.evaluate(() => ({ height: streams[0].hls.levels[streams[0].quality]?.height, auto: streams[0].hls.autoLevelEnabled }));
+    assert(kept.height === 720 && !kept.auto, `after a drop and a retry, it stays on the 720p picked by hand (${JSON.stringify(kept)})`);
     await multi.close();
 
     step('A stream with uneven frame timestamps is called out; the menu says how it is decoded');
@@ -681,12 +714,16 @@ async function main() {
 
     step('A stream whose server stops answering is tried again by itself, and plays again');
     const down = await browser.newPage();
+    const downLogs = [];
+    down.on('console', (m) => /retrying in/i.test(m.text()) && downLogs.push(m.text()));
     await down.goto(`chrome-extension://${ext.id}/player.html`);
     await down.type('input[name=url]', MASTER_URL.replace('/live/', '/live/down/'));
     await down.type('input[name=referer]', EMBED + '/');
     await down.click('button::-p-text(Play)');
     const retryNote = await waitForText(down, /Retrying in 5 s \(try 1 of 3\)/, 15000);
     ok(`it says so: "${retryNote.slice(0, 160)}"`);
+    await new Promise((r) => setTimeout(r, 2500)); // a few seconds of countdown
+    assert(downLogs.length === 1, `the countdown logs once, not every second (${downLogs.length} log lines)`);
     await waitForPlayback(down, 'dropped stream after the automatic retry', 1, 20000);
     ok('and plays once the server answers again');
     const backNote = await waitForText(down, /Back after 1 automatic retry/, 5000);
@@ -736,6 +773,24 @@ async function main() {
     ok(`which loads them again (${lastUrls[0]})`);
     await reopened.close();
 
+    step("A popup closed in the middle of a quality check leaves no header rule behind");
+    await page.bringToFront();
+    const targetsBefore = new Set(browser.targets()); // the last popup's target may linger
+    await ext.triggerAction(page);
+    const closingPopup = await (
+      await browser.waitForTarget((t) => !targetsBefore.has(t) && t.url().includes('/popup.html'), { timeout: 5000 })
+    ).asPage();
+    await closingPopup.waitForSelector('button::-p-text(Check quality)', { timeout: 5000 });
+    await closingPopup.click('button::-p-text(Check quality)');
+    const popupRuleCount = () =>
+      sw.evaluate(async () => (await chrome.declarativeNetRequest.getSessionRules()).filter((r) => r.condition.tabIds?.includes(chrome.tabs.TAB_ID_NONE)).length);
+    // Mid-check: its preview is playing (it waits its turn behind the popup's playlist reads).
+    await closingPopup.waitForSelector('.preview:not([hidden]) video', { timeout: 15000 });
+    assert((await popupRuleCount()) > 0, 'the check has its header rule');
+    await closingPopup.close();
+    for (let i = 0; i < 30 && (await popupRuleCount()) > 0; i++) await new Promise((r) => setTimeout(r, 100));
+    assert((await popupRuleCount()) === 0, 'closing the popup removes it');
+
     step('The garbled playlist from earlier gives up after 3 automatic retries, and says so');
     // Its retries (5 + 15 + 30 s) have been running behind the steps since.
     const gaveUp = await waitForText(garbled, /^Stopped after 3 automatic retries: the server sent something that isn't a playlist\. Press Retry/, 60000);
@@ -759,9 +814,9 @@ async function main() {
 
 // A hang must fail loudly too, not leave the run sitting there.
 const watchdog = setTimeout(() => {
-  console.error('\nFAIL — test did not finish within 120s (hung)');
+  console.error('\nFAIL — test did not finish within 240s (hung)');
   process.exit(1);
-}, 120000);
+}, 240000);
 watchdog.unref();
 
 main().catch((err) => {

@@ -20,7 +20,7 @@ let pageError = ''; // a problem that isn't about one stream
 const big = () => streams[0];
 const streamOf = (video) => streams.find((s) => s.video === video);
 
-const { makeLoader, snapFps, rateText, codecName, COMMON_FPS } = StreamSnifferShared;
+const { makeLoader, snapTo, snapFps, bestLevel, rateText, codecName, COMMON_FPS } = StreamSnifferShared;
 
 // Registers a host for this stream's Referer/Origin before its first request there (see shared.js).
 const allowHost = (stream, url) => StreamSnifferShared.allowHost(stream.id, stream.hosts, url);
@@ -34,7 +34,10 @@ function loaderFor(stream) {
         render();
       }
     },
-    onFail: (msg) => fail(stream, msg),
+    onFail: (msg) => {
+      stream.loadError = msg; // says more than hls.js's error that follows (see the ERROR handler)
+      fail(stream, msg);
+    },
   });
 }
 
@@ -83,8 +86,9 @@ const RETRY_DELAYS_S = [5, 15, 30];
 
 // Plays source in slot 0 (big) or 1 (small), replacing whatever was there. When it's a retry:
 // retries counts the automatic tries so far (see RETRY_DELAYS_S), lastReason says why the last
-// one stopped, and manual is a press of Retry.
-async function startStream(source, slot, { retries = 0, lastReason = '', manual = false } = {}) {
+// one stopped, manual is a press of Retry, and pick is the quality picked by hand before it
+// ({ bitrate, height }), kept if the stream still offers it.
+async function startStream(source, slot, { retries = 0, lastReason = '', manual = false, pick = null } = {}) {
   const old = streams[slot];
   if (old) await stopStream(old);
   const video = old?.video ?? videos.find((v) => !streamOf(v));
@@ -112,6 +116,8 @@ async function startStream(source, slot, { retries = 0, lastReason = '', manual 
     fps: 0, // frames shown per second of video, counted as they're shown (see the frame counter)
     quality: -1, // the quality picked in the menu: an index into hls.levels, or -1 for Auto
     stopped: false, // hls.js gave up (a fatal error); Retry starts it again
+    loadError: '', // a problem the loader reported (see loaderFor)
+    restarting: false, // a retry of this stream has begun (see retry)
     retries,
     retryTimer: null, // the countdown to the next automatic try
     mediaRecoveredAt: -Infinity, // performance.now() of the last decoder recovery (see the ERROR handler)
@@ -185,9 +191,10 @@ async function startStream(source, slot, { retries = 0, lastReason = '', manual 
     if (data.fatal) {
       stream.status = 'Stopped';
       stream.stopped = true;
-      // Keep a more specific message (e.g. from allowHost) if one is already showing.
-      if (stream.error) return fail(stream, stream.error);
-      const reason = stopReason(data, code);
+      // A loader problem (a host whose headers couldn't be set, a disguised segment that
+      // couldn't be decoded) says more than hls.js does. Any other message already showing is
+      // older and unrelated, and mustn't stop the retries.
+      const reason = stream.loadError || stopReason(data, code);
       const refused = code >= 400 && code < 500;
       if (!refused && stream.retries < RETRY_DELAYS_S.length) {
         return scheduleRetry(stream, reason, detail);
@@ -238,7 +245,13 @@ async function startStream(source, slot, { retries = 0, lastReason = '', manual 
   hls.on(Hls.Events.MANIFEST_PARSED, (_e, { levels }) => {
     // Start on the best quality, and let Auto drop down if the connection can't keep up, rather
     // than starting low and working up.
-    if (levels.length > 1) hls.startLevel = levels.reduce((best, l, i) => (l.bitrate > levels[best].bitrate ? i : best), 0);
+    const picked = pick ? levels.findIndex((l) => l.bitrate === pick.bitrate && l.height === pick.height) : -1;
+    if (picked >= 0) {
+      stream.quality = picked;
+      hls.currentLevel = picked; // held there, as before the retry
+    } else if (levels.length > 1) {
+      hls.startLevel = bestLevel(levels);
+    }
     stream.status = `Playing · ${res.mode}${stream.unwrapped ? ' · segments are disguised as images; decoding them' : ''}`;
     render();
     startPlayback(stream);
@@ -303,21 +316,29 @@ function scheduleRetry(s, reason, detail) {
   const at = Date.now() + RETRY_DELAYS_S[s.retries] * 1000;
   const what = s.retries ? `Retry ${s.retries} of ${total} didn't work: ${reason}` : `The stream stopped: ${reason}`;
   s.status = `Stopped · retrying soon (try ${n} of ${total})`;
+  console.error(`[stream-sniffer] ${what}; retrying in ${RETRY_DELAYS_S[s.retries]} s:`, detail);
   const tick = () => {
     const left = Math.ceil((at - Date.now()) / 1000);
     if (left <= 0) return retry(s, { retries: n, lastReason: reason });
-    fail(s, `${what}. Retrying in ${left} s (try ${n} of ${total}). (${detail})`);
+    s.error = `${what}. Retrying in ${left} s (try ${n} of ${total}). (${detail})`;
+    render();
   };
   s.retryTimer = setInterval(tick, 1000);
   tick();
 }
 
 // Starts a stopped stream again in its slot, with the same link and headers.
+// Only once per stream: a second press (a double-click, or Retry in both the message and the
+// menu) would otherwise start a second copy before the first replaced this one. A quality picked
+// by hand carries over.
 function retry(s, opts = {}) {
   clearInterval(s.retryTimer);
   const slot = streams.indexOf(s);
-  if (slot < 0) return; // removed or replaced meanwhile
-  startStream(s.source, slot, opts).catch((err) => failPage(err.message));
+  if (slot < 0 || s.restarting) return; // removed or replaced meanwhile, or already restarting
+  s.restarting = true;
+  const picked = s.quality >= 0 ? s.hls?.levels[s.quality] : null;
+  const pick = picked && { bitrate: picked.bitrate, height: picked.height };
+  startStream(s.source, slot, { ...opts, pick }).catch((err) => failPage(err.message));
 }
 const retryById = (id) => {
   const s = streams.find((x) => x.id === id);
@@ -717,9 +738,7 @@ function measureHz() {
     if (gaps.length < 120) return requestAnimationFrame(step);
     measuringHz = false;
     const median = gaps.sort((a, b) => a - b)[gaps.length >> 1];
-    const hz = 1000 / median;
-    const closest = COMMON_HZ.reduce((a, b) => (Math.abs(b - hz) < Math.abs(a - hz) ? b : a));
-    displayHz = Math.abs(closest - hz) <= 2 ? closest : Math.round(hz);
+    displayHz = snapTo(1000 / median, COMMON_HZ, 2);
     render();
   };
   requestAnimationFrame(step);
@@ -1432,14 +1451,17 @@ async function init() {
     sources.push(await saveSource({ url: params.get('url'), referer: params.get('referer') || '', origin: params.get('origin') || '' }));
   }
   if (!sources.length) return openMenu(true);
-  // Not awaited: the streams shouldn't wait on how a menu was left.
+  // Not awaited: the streams shouldn't wait on how a menu was left. If starting them fails
+  // first, the form stays open (see below): it's the way to recover.
   chrome.storage.local
     .get('playUrlOpen')
-    .then(({ playUrlOpen }) => (playUrl.open = playUrlOpen !== false))
+    .then(({ playUrlOpen }) => !startFailed && (playUrl.open = playUrlOpen !== false))
     .catch((err) => failPage(`Couldn't read whether "Play a URL" was left open: ${err.message}`));
   for (const [i, source] of sources.entries()) await startStream(source, i);
 }
+let startFailed = false;
 init().catch((err) => {
+  startFailed = true;
   playUrl.open = true;
   openMenu(true);
   failPage(err.message);

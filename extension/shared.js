@@ -71,13 +71,17 @@
     };
   }
 
-  // A frame rate counted over a couple of seconds wobbles by a frame or so; snap it to the
-  // usual rate it's close to.
-  const COMMON_FPS = [24, 25, 30, 48, 50, 60, 120];
-  function snapFps(fps) {
-    const closest = COMMON_FPS.reduce((a, b) => (Math.abs(b - fps) < Math.abs(a - fps) ? b : a));
-    return Math.abs(closest - fps) <= 1.5 ? closest : Math.round(fps);
+  // The value in list nearest to v if it's within tol of it, else v rounded. Measured rates
+  // wobble a little; this snaps them to the usual one they're close to.
+  function snapTo(v, list, tol) {
+    const closest = list.reduce((a, b) => (Math.abs(b - v) < Math.abs(a - v) ? b : a));
+    return Math.abs(closest - v) <= tol ? closest : Math.round(v);
   }
+  const COMMON_FPS = [24, 25, 30, 48, 50, 60, 120];
+  const snapFps = (fps) => snapTo(fps, COMMON_FPS, 1.5);
+
+  // The index of the highest-bitrate level: the best quality a stream offers.
+  const bestLevel = (levels) => levels.reduce((best, l, i) => (l.bitrate > levels[best].bitrate ? i : best), 0);
 
   // A video format's common name from its codec string(s), e.g. "avc1.640028" -> "H.264".
   function codecName(codecs) {
@@ -95,5 +99,5 @@
     return mbps >= 1 ? `${mbps.toFixed(1)} Mbps` : `${Math.round(mbps * 1000)} kbps`;
   }
 
-  globalThis.StreamSnifferShared = { allowHost, makeLoader, snapFps, rateText, codecName, COMMON_FPS };
+  globalThis.StreamSnifferShared = { allowHost, makeLoader, snapTo, snapFps, bestLevel, rateText, codecName, COMMON_FPS };
 })();

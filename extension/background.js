@@ -146,6 +146,16 @@ const STREAM_MESSAGES = {
 // The popup's quality check plays streams too, but the popup isn't a tab: its requests have no
 // tab (TAB_ID_NONE), so its rules are also limited to requests this extension starts.
 const POPUP_URL = chrome.runtime.getURL('popup.html');
+// The popup holds a connection open while it's up; when it closes (even mid-check), its header
+// rules go, so none outlive it.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'popup') return;
+  port.onDisconnect.addListener(() => {
+    serialRules(() => removeTabStreams(chrome.tabs.TAB_ID_NONE)).catch((err) =>
+      console.error('[stream-sniffer] failed to remove the closed popup\'s header rules', err)
+    );
+  });
+});
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   const handler = STREAM_MESSAGES[msg?.type];
   if (!handler) return false;

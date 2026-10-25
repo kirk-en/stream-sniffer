@@ -56,7 +56,7 @@ async function addToPlayer(c) {
 // rule of its own; see background.js) and reports what it says. A playlist listing qualities
 // says their resolution, often frame rate, and an advertised bitrate; a playlist of a single
 // quality says none of that, so "Check quality" plays it unseen for a few seconds to measure.
-const { allowHost, makeLoader, snapFps, rateText, codecName } = StreamSnifferShared;
+const { allowHost, makeLoader, snapFps, bestLevel, rateText, codecName } = StreamSnifferShared;
 
 async function withHeaders(c, fn) {
   const streamId = crypto.randomUUID();
@@ -183,7 +183,7 @@ async function checkQuality(c, previewEl) {
         const maybeDone = () => got.height && got.fps && got.seconds && done();
 
         hls.on(Hls.Events.MANIFEST_PARSED, (_e, { levels }) => {
-          got.level = levels.reduce((best, l, i) => (l.bitrate > levels[best].bitrate ? i : best), 0);
+          got.level = bestLevel(levels);
           hls.currentLevel = got.level; // the best one, held there
           video.play().catch((err) => done(`video.play() failed: ${err.message}`));
         });
@@ -217,8 +217,15 @@ async function checkQuality(c, previewEl) {
   );
 }
 
-// One playlist fetch at a time, so a page with many playlists doesn't fire them all at once.
-let describing = Promise.resolve();
+// Playlist reads and quality checks run one at a time. The popup's header rules can't tell two
+// of its own requests apart (see background.js), so two at once to the same server with
+// different headers would clash; and a page with many playlists doesn't fire them all at once.
+let popupQueue = Promise.resolve();
+function queued(fn) {
+  const p = popupQueue.then(fn);
+  popupQueue = p.catch(() => {});
+  return p;
+}
 
 function button(label, onClick) {
   const b = document.createElement('button');
@@ -273,14 +280,12 @@ function streamItem(i) {
   const info = document.createElement('div');
   info.className = 'quality small';
   info.textContent = 'Reading the playlist…';
-  describing = describing.then(() =>
-    describe(latest()).then(
-      (text) => (info.textContent = text),
-      (err) => {
-        info.textContent = `Couldn't read the playlist: ${err.message}`;
-        info.classList.add('error');
-      }
-    )
+  queued(() => describe(latest())).then(
+    (text) => (info.textContent = text),
+    (err) => {
+      info.textContent = `Couldn't read the playlist: ${err.message}`;
+      info.classList.add('error');
+    }
   );
   const preview = document.createElement('div');
   preview.className = 'preview';
@@ -320,7 +325,7 @@ function streamItem(i) {
       checked.hidden = false;
       checked.classList.remove('error');
       checked.textContent = 'Checking: playing it unseen for a few seconds…';
-      checkQuality(latest(), preview)
+      queued(() => checkQuality(latest(), preview))
         .then(
           (text) => (checked.textContent = text),
           (err) => {
@@ -361,7 +366,9 @@ async function main() {
     chrome.tabs.create({ url: chrome.runtime.getURL('player.html') })
   );
   showReopen().catch((err) => console.error('[stream-sniffer] could not check the last session', err));
-  // Header rules a closed popup left behind (it can close mid-check).
+  // The background drops the popup's header rules when this connection closes, i.e. when the
+  // popup does, even mid-check. Any an earlier popup left (a background restart) go now.
+  chrome.runtime.connect({ name: 'popup' });
   await chrome.runtime.sendMessage({ type: 'player-reset' });
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) throw new Error('Could not find the active tab');
