@@ -76,8 +76,15 @@ function failPage(msg) {
   render();
 }
 
-// Plays source in slot 0 (big) or 1 (small), replacing whatever was there.
-async function startStream(source, slot) {
+// A stream that stops because the server didn't answer (a dropped connection, a timeout, a
+// 5xx) is tried again by itself after these waits; one that plays again starts the count over.
+// A refused link (4xx) isn't: it has most likely expired, and only its page has a fresh one.
+const RETRY_DELAYS_S = [5, 15, 30];
+
+// Plays source in slot 0 (big) or 1 (small), replacing whatever was there. When it's a retry:
+// retries counts the automatic tries so far (see RETRY_DELAYS_S), lastReason says why the last
+// one stopped, and manual is a press of Retry.
+async function startStream(source, slot, { retries = 0, lastReason = '', manual = false } = {}) {
   const old = streams[slot];
   if (old) await stopStream(old);
   const video = old?.video ?? videos.find((v) => !streamOf(v));
@@ -104,6 +111,16 @@ async function startStream(source, slot) {
     rates: [], // the last few video segments' { level, bytes, duration }, for measuredMbps
     fps: 0, // frames shown per second of video, counted as they're shown (see the frame counter)
     quality: -1, // the quality picked in the menu: an index into hls.levels, or -1 for Auto
+    stopped: false, // hls.js gave up (a fatal error); Retry starts it again
+    retries,
+    retryTimer: null, // the countdown to the next automatic try
+    // Shown while a retry connects, until the picture is back.
+    retrying: retries > 0 || manual,
+    retryNote: manual
+      ? 'Retrying: connecting…'
+      : `Retry ${retries} of ${RETRY_DELAYS_S.length}: connecting… (it stopped because ${lastReason})`,
+    recovered: '', // e.g. "back after 2 automatic retries (2:31:05 PM)"
+    recoveredUntil: 0, // Date.now() until which that shows over the video
   };
   streams[slot] = stream;
   pageError = '';
@@ -135,8 +152,22 @@ async function startStream(source, slot) {
     const detail = `${data.type} / ${data.details}${why}${code ? ` — HTTP ${code}` : ''}${data.url ? ` — ${data.url}` : ''}${serverSent(data)}`;
     if (data.fatal) {
       stream.status = 'Stopped';
+      stream.stopped = true;
       // Keep a more specific message (e.g. from allowHost) if one is already showing.
-      fail(stream, stream.error || `Playback failed: ${detail}`);
+      if (stream.error) return fail(stream, stream.error);
+      const reason = stopReason(data, code);
+      const refused = code >= 400 && code < 500;
+      if (data.type === Hls.ErrorTypes.NETWORK_ERROR && !refused && stream.retries < RETRY_DELAYS_S.length) {
+        return scheduleRetry(stream, reason, detail);
+      }
+      const n = stream.retries;
+      const after = n ? ` after ${n} automatic ${n === 1 ? 'retry' : 'retries'}` : '';
+      fail(
+        stream,
+        refused
+          ? `Stopped: ${reason}, so the link has probably expired. Reopen the stream from its page, or press Retry. (${detail})`
+          : `Stopped${after}: ${reason}. Press Retry to try again. (${detail})`
+      );
     } else {
       // hls.js retries these itself, but a stall with no explanation looks like a frozen
       // picture; show the latest one until playback is healthy again.
@@ -179,6 +210,15 @@ async function startStream(source, slot) {
   // FRAG_CHANGED fires when a segment starts playing, so this is the quality on screen, not the
   // one being downloaded ahead.
   hls.on(Hls.Events.FRAG_CHANGED, (_e, { frag }) => {
+    if (stream.retrying) {
+      stream.retrying = false;
+      const n = stream.retries;
+      stream.recovered = `back after ${n ? `${n} automatic ${n === 1 ? 'retry' : 'retries'}` : 'Retry'} (${new Date().toLocaleTimeString()})`;
+      stream.recoveredUntil = Date.now() + 10000;
+      setTimeout(render, 10000);
+      render();
+    }
+    stream.retries = 0; // it plays: a later drop gets every automatic try again
     if (frag.level === stream.playingLevel) return;
     stream.playingLevel = frag.level;
     render();
@@ -202,7 +242,45 @@ function serverSent(data) {
   return ` — server sent ${text ? `"${text.slice(0, 200)}${text.length > 200 ? '…' : ''}"` : 'an empty body'}`;
 }
 
+// Why a stream stopped, in plain words.
+function stopReason(data, code) {
+  if (/^not a playlist/.test(data.response?.text ?? '') || /ParsingError$/.test(data.details)) return "the server sent something that isn't a playlist";
+  if (code >= 500) return `the server had an error (HTTP ${code})`;
+  if (code >= 400) return `the server refused the link (HTTP ${code})`;
+  if (/Timeout$/.test(data.details)) return 'the server took too long to answer';
+  return "the server didn't answer (the connection dropped or couldn't be made)";
+}
+
+// Counts down to the next automatic try, saying why the stream stopped.
+function scheduleRetry(s, reason, detail) {
+  const n = s.retries + 1;
+  const total = RETRY_DELAYS_S.length;
+  const at = Date.now() + RETRY_DELAYS_S[s.retries] * 1000;
+  const what = s.retries ? `Retry ${s.retries} of ${total} didn't work: ${reason}` : `The stream stopped: ${reason}`;
+  s.status = `Stopped · retrying soon (try ${n} of ${total})`;
+  const tick = () => {
+    const left = Math.ceil((at - Date.now()) / 1000);
+    if (left <= 0) return retry(s, { retries: n, lastReason: reason });
+    fail(s, `${what}. Retrying in ${left} s (try ${n} of ${total}). (${detail})`);
+  };
+  s.retryTimer = setInterval(tick, 1000);
+  tick();
+}
+
+// Starts a stopped stream again in its slot, with the same link and headers.
+function retry(s, opts = {}) {
+  clearInterval(s.retryTimer);
+  const slot = streams.indexOf(s);
+  if (slot < 0) return; // removed or replaced meanwhile
+  startStream(s.source, slot, opts).catch((err) => failPage(err.message));
+}
+const retryById = (id) => {
+  const s = streams.find((x) => x.id === id);
+  if (s) retry(s, { manual: true });
+};
+
 async function stopStream(s) {
+  clearInterval(s.retryTimer);
   s.hls?.destroy();
   s.hls = null;
   s.video.removeAttribute('src');
@@ -515,13 +593,23 @@ function health(s) {
   if (s.bufferingSince) parts.push(`Buffering since ${s.bufferingSince}, waiting for video data`);
   if (s.lastProblem) parts.push(`Last problem ${s.lastProblem}`);
   if (s.bufferingSince && s.lastSkipped) parts.push(`Last skipped playlist problem ${s.lastSkipped}`);
+  if (s.retrying && !s.stopped) parts.push(s.retryNote);
   return parts.join(' · ');
 }
 
-// A message over the video, with an × that hides it.
+// A message over the video, with an × that hides it, and Retry for a stopped stream.
 const dismissed = new Set();
 let renderedProblems = '';
-function problemLine([cls, text]) {
+function retryButton(streamId) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'retry';
+  b.textContent = 'Retry';
+  b.title = 'Start this stream again, with the same link';
+  b.addEventListener('click', () => retryById(streamId));
+  return b;
+}
+function problemLine({ cls, text, key, retryId }) {
   const p = document.createElement('p');
   p.className = cls;
   const span = document.createElement('span');
@@ -532,10 +620,12 @@ function problemLine([cls, text]) {
   close.textContent = '×';
   close.title = close.ariaLabel = 'Dismiss this message';
   close.addEventListener('click', () => {
-    dismissed.add(text);
+    dismissed.add(key);
     render();
   });
-  p.append(span, close);
+  p.append(span);
+  if (retryId) p.append(retryButton(retryId));
+  p.append(close);
   return p;
 }
 
@@ -543,20 +633,30 @@ let renderedEntries = '';
 function render() {
   const label = (s) => (streams.length > 1 ? (s === big() ? 'Big: ' : 'Small: ') : '');
   const lines = [];
-  if (pageError) lines.push(['error', pageError]);
+  // key: what dismissing remembers. Usually the text, so a new or changed message (they carry a
+  // time) still shows; a retry countdown keeps one key while its seconds tick.
+  const line = (cls, text, more = {}) => lines.push({ cls, text, key: text, retryId: null, ...more });
+  if (pageError) line('error', pageError);
   for (const s of streams) {
-    if (s.error) lines.push(['error', label(s) + s.error]);
-    if (health(s)) lines.push(['warn', label(s) + health(s)]);
+    if (s.error) line('error', label(s) + s.error, { retryId: s.stopped ? s.id : null, ...(s.retryTimer && { key: `countdown:${s.id}` }) });
+    if (health(s)) line('warn', label(s) + health(s));
+    if (s.recovered && Date.now() < s.recoveredUntil) line('ok', label(s) + s.recovered[0].toUpperCase() + s.recovered.slice(1));
   }
-  // Hidden messages are remembered by their text, so a new or changed message (they carry a time)
-  // still shows. Forgetting the ones that are gone keeps the set small.
-  const texts = new Set(lines.map(([, text]) => text));
-  for (const t of dismissed) if (!texts.has(t)) dismissed.delete(t);
-  const shown = lines.filter(([, text]) => !dismissed.has(text));
-  // Rebuilt only when the messages change, so an × isn't swapped out from under a click.
-  if (JSON.stringify(shown) !== renderedProblems) {
-    renderedProblems = JSON.stringify(shown);
+  // Forgetting dismissed messages that are gone keeps the set small.
+  const keys = new Set(lines.map((l) => l.key));
+  for (const k of dismissed) if (!keys.has(k)) dismissed.delete(k);
+  const shown = lines.filter((l) => !dismissed.has(l.key));
+  // Rebuilt only when the set of messages changes, so an × or Retry isn't swapped out from under
+  // a click; a countdown just updates its text.
+  const structure = JSON.stringify(shown.map(({ cls, key, retryId }) => [cls, key, retryId]));
+  if (structure !== renderedProblems) {
+    renderedProblems = structure;
     problemsEl.replaceChildren(...shown.map(problemLine));
+  } else {
+    shown.forEach((l, i) => {
+      const span = problemsEl.children[i].firstChild;
+      if (span.textContent !== l.text) span.textContent = l.text;
+    });
   }
 
   // Rebuilt only when its text changes, so a link isn't swapped out from under a click.
@@ -573,6 +673,7 @@ function render() {
     pageTitle: s.source.pageTitle,
     status: [
       s.status,
+      s.recovered,
       qualityText(s),
       s.skipped && `hls.js skipped ${s.skipped} playlist problem${s.skipped === 1 ? '' : 's'} (last ${s.lastSkipped})`,
       s.resumes && `resumed after ${s.resumes} pause${s.resumes === 1 ? '' : 's'} (last ${s.lastResume})`,
@@ -581,6 +682,7 @@ function render() {
       .filter(Boolean)
       .join(' · '),
     url: s.source.url,
+    retryId: s.stopped ? s.id : null,
   }));
   if (JSON.stringify(entries) !== renderedEntries) {
     renderedEntries = JSON.stringify(entries);
@@ -615,6 +717,7 @@ function streamEntry(e) {
   status.className = 'muted small';
   status.textContent = e.status;
   el.append(status);
+  if (e.retryId) el.append(retryButton(e.retryId));
   const url = document.createElement('code');
   url.textContent = e.url;
   el.append(url);

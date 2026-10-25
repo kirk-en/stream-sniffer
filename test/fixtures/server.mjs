@@ -141,6 +141,7 @@ self.addEventListener('fetch', (e) => {
   const liveStart = {}; // per live stream: when it was first requested
   let rotation = 0;
   let flakyRefreshes = 0;
+  let downDrops = 0;
   // allowed: the Referer prefix and CORS origin this CDN accepts.
   const makeCdn = (base, allowed) => http.createServer((req, res) => {
     const url = new URL(req.url, base);
@@ -189,6 +190,16 @@ self.addEventListener('fetch', (e) => {
       return res.end(
         `#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=320x240\nindex.m3u8?token=${TOKEN}\n`
       );
+    }
+    // /live/down/: the first two requests for the master playlist get no answer (the connection
+    // is dropped), as when a re-stream blips; hls.js retries once, then gives up.
+    if (url.pathname === '/live/down/master.m3u8' && ++downDrops <= 2) return res.socket.destroy();
+    if (url.pathname === '/live/down/master.m3u8') {
+      res.writeHead(200, { ...headers, 'content-type': 'application/vnd.apple.mpegurl' });
+      return res.end(`#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=320x240
+index.m3u8?token=${TOKEN}
+`);
     }
     // /live/multi/: two quality levels, the test video at 320x240 and at 1280x720 (under hi/).
     if (url.pathname === '/live/multi/master.m3u8') {

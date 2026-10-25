@@ -569,14 +569,14 @@ async function main() {
     ok(`status reads the size off the video: "${directNote.slice(0, 160)}"`);
     await direct.close();
 
-    step('A playlist the server garbles shows why it failed and what the server sent');
+    step('A playlist the server garbles shows why it stopped and what the server sent, and is retried');
     const garbled = await browser.newPage();
     await garbled.goto(`chrome-extension://${ext.id}/player.html`);
     await garbled.type('input[name=url]', MASTER_URL.replace('/live/', '/live/broken/'));
     await garbled.type('input[name=referer]', EMBED + '/');
     await garbled.click('button::-p-text(Play)');
     // A garbled reply is retried like a failed load, so this takes a few seconds.
-    const garbledMsg = await waitForText(garbled, /Playback failed.*EXTM3U.*503 Service Unavailable/, 30000);
+    const garbledMsg = await waitForText(garbled, /isn't a playlist\. Retrying in \d+ s \(try 1 of 3\).*EXTM3U.*503 Service Unavailable/, 30000);
     ok(`player reports: "${garbledMsg}"`);
 
     step('A live stream whose segment URLs change on every refresh keeps playing, and the player says what it skipped');
@@ -621,6 +621,20 @@ async function main() {
     ok(`a pause is undone at once and noted in the status: "${resumeNote.slice(0, 160)}"`);
     await flaky.close();
 
+    step('A stream whose server stops answering is tried again by itself, and plays again');
+    const down = await browser.newPage();
+    await down.goto(`chrome-extension://${ext.id}/player.html`);
+    await down.type('input[name=url]', MASTER_URL.replace('/live/', '/live/down/'));
+    await down.type('input[name=referer]', EMBED + '/');
+    await down.click('button::-p-text(Play)');
+    const retryNote = await waitForText(down, /Retrying in 5 s \(try 1 of 3\)/, 15000);
+    ok(`it says so: "${retryNote.slice(0, 160)}"`);
+    await waitForPlayback(down, 'dropped stream after the automatic retry', 1, 20000);
+    ok('and plays once the server answers again');
+    const backNote = await waitForText(down, /Back after 1 automatic retry/, 5000);
+    ok(`and says it's back: "${backNote}"`);
+    await down.close();
+
     step('Manual mode without a Referer fails loudly, not silently');
     const bad = await browser.newPage();
     await bad.goto(`chrome-extension://${ext.id}/player.html`);
@@ -629,9 +643,22 @@ async function main() {
     await bad.waitForSelector('::-p-text(403)', { timeout: 10000 });
     ok('player shows the 403 error to the user');
     await bad.screenshot({ path: path.join(artifactsDir, 'player-403.png') });
+    const expiredMsg = await waitForText(bad, /probably expired/);
+    ok(`a refused link isn't retried by itself, and says why: "${expiredMsg.slice(-110)}"`);
+    const refusedSoFar = servers.rejected.length;
+    await bad.click('#problems p.error .retry');
+    for (let i = 0; i < 50 && servers.rejected.length === refusedSoFar; i++) await new Promise((r) => setTimeout(r, 200));
+    assert(servers.rejected.length > refusedSoFar, 'Retry asks the server again (which refuses again: the link is bad)');
+    await bad.waitForSelector('#problems p.error .dismiss', { timeout: 10000 });
     await bad.click('#problems p.error .dismiss');
     await bad.waitForFunction(() => !/403/.test(document.getElementById('problems').textContent), { timeout: 5000 });
     ok('the × on the error dismisses it');
+
+    step('The garbled playlist from earlier gives up after 3 automatic retries, and says so');
+    // Its retries (5 + 15 + 30 s) have been running behind the steps since.
+    const gaveUp = await waitForText(garbled, /^Stopped after 3 automatic retries: the server sent something that isn't a playlist\. Press Retry/, 60000);
+    ok(`"${gaveUp.slice(0, 110)}…"`);
+    assert(await garbled.$('#problems .retry'), 'with a Retry button');
 
     step('"Cast via relay" with headers the CDN rejects reports the 403 instead of casting a dead URL');
     await startCasting(bad);
