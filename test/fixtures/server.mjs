@@ -190,6 +190,14 @@ self.addEventListener('fetch', (e) => {
         `#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=320x240\nindex.m3u8?token=${TOKEN}\n`
       );
     }
+    // /live/multi/: two quality levels (both play the same test video).
+    if (url.pathname === '/live/multi/master.m3u8') {
+      res.writeHead(200, { ...headers, 'content-type': 'application/vnd.apple.mpegurl' });
+      return res.end(
+        `#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=320x240\nindex.m3u8?token=${TOKEN}&v=low\n` +
+          `#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1280x720\nindex.m3u8?token=${TOKEN}&v=high\n`
+      );
+    }
     const png = url.pathname.startsWith('/live/png/');
     const file = path.join(streamDir, path.basename(url.pathname));
     if (!url.pathname.startsWith('/live/') || !fs.existsSync(file)) {

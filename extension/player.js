@@ -154,6 +154,8 @@ async function startStream(source, slot) {
     casting: false,
     skipped: 0, // playlist problems hls.js skipped (see hlsLogger)
     lastSkipped: '',
+    playingLevel: -1, // index into hls.levels of the picture on screen; -1 until the first one
+    quality: -1, // the quality picked in the menu: an index into hls.levels, or -1 for Auto
   };
   streams[slot] = stream;
   pageError = '';
@@ -211,12 +213,19 @@ async function startStream(source, slot) {
   for (const e of [Hls.Events.MANIFEST_LOADED, Hls.Events.LEVEL_LOADED, Hls.Events.AUDIO_TRACK_LOADED, Hls.Events.SUBTITLE_TRACK_LOADED]) {
     hls.on(e, recovered('playlist'));
   }
-  hls.on(Hls.Events.MANIFEST_PARSED, (_e, data) => {
-    const n = data.levels.length;
-    stream.status = `Playing · ${n} quality level${n === 1 ? '' : 's'} · ${res.mode}${stream.unwrapped ? ' · segments are disguised as images; decoding them' : ''}`;
+  hls.on(Hls.Events.MANIFEST_PARSED, () => {
+    stream.status = `Playing · ${res.mode}${stream.unwrapped ? ' · segments are disguised as images; decoding them' : ''}`;
     render();
     startPlayback(stream);
   });
+  // FRAG_CHANGED fires when a segment starts playing, so this is the quality on screen, not the
+  // one being downloaded ahead.
+  hls.on(Hls.Events.FRAG_CHANGED, (_e, { frag }) => {
+    if (frag.level === stream.playingLevel) return;
+    stream.playingLevel = frag.level;
+    render();
+  });
+  hls.on(Hls.Events.LEVELS_UPDATED, () => render());
   hls.loadSource(source.url);
   hls.attachMedia(video);
 }
@@ -453,12 +462,62 @@ navigator.mediaSession.setActionHandler('play', () => {
   }
 });
 
+// "1080p", or the bitrate for a stream that doesn't say its resolution.
+function levelName(l) {
+  return l?.height ? `${l.height}p` : `${Math.round((l?.bitrate ?? 0) / 1000)} kbps`;
+}
+
+// Which quality is on screen and why, e.g. "720p, picked automatically from 2 quality levels".
+function qualityText(s) {
+  const levels = s.hls?.levels ?? [];
+  if (!levels.length) return '';
+  const n = levels.length;
+  const count = `${n} quality level${n === 1 ? '' : 's'}`;
+  if (s.playingLevel < 0) return count;
+  const now = levelName(levels[s.playingLevel]);
+  if (n === 1) return `${now}, the only quality level`;
+  if (s.quality < 0) return `${now}, picked automatically from ${count}`;
+  if (s.quality !== s.playingLevel) return `${now}, switching to ${levelName(levels[s.quality])} (of ${count})`;
+  return `${now}, picked by you (of ${count})`;
+}
+
+// The menu's quality picker. Auto lets hls.js follow the connection speed; a picked level stays
+// until changed. The switch happens at the next segment, so the picture doesn't stop.
+function setQuality(streamId, level) {
+  const s = streams.find((x) => x.id === streamId);
+  if (!s?.hls) return;
+  s.quality = level;
+  s.hls.nextLevel = level;
+  render();
+}
+
 function health(s) {
   const parts = [];
   if (s.bufferingSince) parts.push(`Buffering since ${s.bufferingSince}, waiting for video data`);
   if (s.lastProblem) parts.push(`Last problem ${s.lastProblem}`);
   if (s.bufferingSince && s.lastSkipped) parts.push(`Last skipped playlist problem ${s.lastSkipped}`);
   return parts.join(' · ');
+}
+
+// A message over the video, with an × that hides it.
+const dismissed = new Set();
+let renderedProblems = '';
+function problemLine([cls, text]) {
+  const p = document.createElement('p');
+  p.className = cls;
+  const span = document.createElement('span');
+  span.textContent = text;
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'dismiss';
+  close.textContent = '×';
+  close.title = close.ariaLabel = 'Dismiss this message';
+  close.addEventListener('click', () => {
+    dismissed.add(text);
+    render();
+  });
+  p.append(span, close);
+  return p;
 }
 
 let renderedEntries = '';
@@ -470,14 +529,16 @@ function render() {
     if (s.error) lines.push(['error', label(s) + s.error]);
     if (health(s)) lines.push(['warn', label(s) + health(s)]);
   }
-  problemsEl.replaceChildren(
-    ...lines.map(([cls, text]) => {
-      const p = document.createElement('p');
-      p.className = cls;
-      p.textContent = text;
-      return p;
-    })
-  );
+  // Hidden messages are remembered by their text, so a new or changed message (they carry a time)
+  // still shows. Forgetting the ones that are gone keeps the set small.
+  const texts = new Set(lines.map(([, text]) => text));
+  for (const t of dismissed) if (!texts.has(t)) dismissed.delete(t);
+  const shown = lines.filter(([, text]) => !dismissed.has(text));
+  // Rebuilt only when the messages change, so an × isn't swapped out from under a click.
+  if (JSON.stringify(shown) !== renderedProblems) {
+    renderedProblems = JSON.stringify(shown);
+    problemsEl.replaceChildren(...shown.map(problemLine));
+  }
 
   // Rebuilt only when its text changes, so a link isn't swapped out from under a click.
   const entries = streams.map((s, i) => ({
@@ -486,6 +547,7 @@ function render() {
     pageTitle: s.source.pageTitle,
     status: [
       s.status,
+      qualityText(s),
       s.skipped && `hls.js skipped ${s.skipped} playlist problem${s.skipped === 1 ? '' : 's'} (last ${s.lastSkipped})`,
       s.resumes && `resumed after ${s.resumes} pause${s.resumes === 1 ? '' : 's'} (last ${s.lastResume})`,
       ignoredPauses && `ignored ${ignoredPauses} pause request${ignoredPauses === 1 ? '' : 's'} from Chrome's media controls (last ${lastIgnoredPause})`,
@@ -493,6 +555,12 @@ function render() {
       .filter(Boolean)
       .join(' · '),
     url: s.source.url,
+    id: s.id,
+    quality: s.quality,
+    // Highest first, keeping each level's index in hls.levels.
+    levels: (s.hls?.levels ?? [])
+      .map((l, index) => ({ index, bitrate: l.bitrate, label: l.height ? `${levelName(l)} · ${(l.bitrate / 1e6).toFixed(1)} Mbps` : levelName(l) }))
+      .sort((a, b) => b.bitrate - a.bitrate),
   }));
   if (JSON.stringify(entries) !== renderedEntries) {
     renderedEntries = JSON.stringify(entries);
@@ -524,9 +592,21 @@ function streamEntry(e) {
   const status = document.createElement('p');
   status.className = 'muted small';
   status.textContent = e.status;
+  el.append(status);
+  if (e.levels.length > 1) {
+    const label = document.createElement('label');
+    label.className = 'quality';
+    const select = document.createElement('select');
+    for (const { index, label: text } of [{ index: -1, label: 'Auto (follows your connection speed)' }, ...e.levels]) {
+      select.append(new Option(text, index, false, index === e.quality));
+    }
+    select.addEventListener('change', () => setQuality(e.id, Number(select.value)));
+    label.append('Quality ', select);
+    el.append(label);
+  }
   const url = document.createElement('code');
   url.textContent = e.url;
-  el.append(status, url);
+  el.append(url);
   return el;
 }
 

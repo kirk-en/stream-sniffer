@@ -430,6 +430,30 @@ async function main() {
     const manualTime = await waitForPlayback(manual, 'manual player');
     ok(`manual mode plays (t=${manualTime.toFixed(1)}s)`);
 
+    step('A stream with two quality levels says which one is on screen, and the menu can lock one');
+    const multi = await browser.newPage();
+    await multi.goto(`chrome-extension://${ext.id}/player.html`);
+    await multi.type('input[name=url]', MASTER_URL.replace('/live/', '/live/multi/'));
+    await multi.type('input[name=referer]', EMBED + '/');
+    await multi.click('button::-p-text(Play)');
+    await waitForPlayback(multi, 'two-level stream', 0.5);
+    const autoNote = await waitForText(multi, /(240|720)p, picked automatically from 2 quality levels/);
+    ok(`status names the quality on screen: "${autoNote.slice(0, 160)}"`);
+    const options = await multi.$$eval('label.quality option', (os) => os.map((o) => o.textContent));
+    assert(
+      options.length === 3 && /^Auto/.test(options[0]) && /^720p/.test(options[1]) && /^240p/.test(options[2]),
+      `quality picker lists Auto, then highest first (${options.join(' | ')})`
+    );
+    await multi.select('label.quality select', await multi.$$eval('label.quality option', (os) => os[2].value));
+    await waitForText(multi, /240p, picked by you \(of 2 quality levels\)/, 15000);
+    ok('picking 240p switches to it and says it was picked by hand');
+    await multi.select('label.quality select', await multi.$$eval('label.quality option', (os) => os[1].value));
+    await waitForText(multi, /720p, picked by you \(of 2 quality levels\)/, 15000);
+    const lockedT = await multi.evaluate(() => document.querySelector('video').currentTime);
+    await waitForPlayback(multi, 'two-level stream after switching up', lockedT + 1, 10000);
+    ok('picking 720p switches up, and playback goes on');
+    await multi.close();
+
     step('A playlist the server garbles shows why it failed and what the server sent');
     const garbled = await browser.newPage();
     await garbled.goto(`chrome-extension://${ext.id}/player.html`);
@@ -491,6 +515,9 @@ async function main() {
     await bad.waitForSelector('::-p-text(403)', { timeout: 10000 });
     ok('player shows the 403 error to the user');
     await bad.screenshot({ path: path.join(artifactsDir, 'player-403.png') });
+    await bad.click('#problems p.error .dismiss');
+    await bad.waitForFunction(() => !/403/.test(document.getElementById('problems').textContent), { timeout: 5000 });
+    ok('the × on the error dismisses it');
 
     step('"Cast via relay" with headers the CDN rejects reports the 403 instead of casting a dead URL');
     await bad.click('button::-p-text(Cast via relay)');
