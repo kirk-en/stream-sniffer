@@ -39,6 +39,8 @@
   <!-- Top left: problems, then the ad-break log. -->
   <div id="top-left">
     <div id="problems"></div>
+    <!-- While the detector is on: learning starts only from here (or the menu), never by itself. -->
+    <button id="learn-btn" type="button" class="learn" hidden title="Press during normal play: the detector needs about 30 seconds of the game with the scorebug and the network logo on screen. Not during a commercial, a replay or halftime.">🧠 Learn scorebug &amp; logo</button>
     <!-- Ad-break cues and is_commercial changes as they come. Stays up until closed. -->
     <div id="cues" hidden>
       <p class="head"><span>Ad breaks <span id="cue-count"></span></span><span id="detect-state" class="state" hidden></span><button id="cues-close" type="button" class="dismiss" aria-label="Close" title="Close (the cues stay in Copy log)">×</button></p>
@@ -57,11 +59,12 @@
         <!-- Ad-break markers go to the freeze log (Copy log); see logPlaylistCues in player.js. -->
         <label class="toggle" title="Writes the stream's ad-break markers (SCTE-35 cues, in the playlist or inside the video) to the log. Read them with Copy log."><input id="cue-log" type="checkbox"> Log ad-break cues (SCTE-35)</label>
         <!-- The picture-based detector: detector.js, detector-worker.js, detector-core.js. -->
-        <label class="toggle" title="About twice a second, looks at a small copy of the big picture for the scorebug and the network logo, off the main thread"><input id="detect-on" type="checkbox"> Watch the picture for the scorebug and network logo</label>
+        <label class="toggle" title="About twice a second, looks at a small copy of the big picture for the scorebug and the network logo, off the main thread. A break is called only when both are gone."><input id="detect-on" type="checkbox"> Watch the picture for the scorebug and network logo</label>
+        <!-- Only shown while the detector is on. -->
+        <div id="detect-options" class="detect" hidden>
         <label class="toggle" title="Green: on screen. Red, dashed: gone. Grey: taken for the site's watermark and ignored."><input id="detect-draw" type="checkbox"> Draw boxes around what it finds</label>
         <label class="toggle" title="Writes is_commercial changes, with why, to the box at the top left and to Copy log"><input id="detect-log" type="checkbox"> Log commercial breaks (is_commercial), with why</label>
-        <label class="toggle" title="On: a break is called only once both the scorebug and the network logo are learned, and only when both are gone. Off: whichever of them it has learned. Turn off for a broadcast with its logo inside the scorebug."><input id="detect-both" type="checkbox" checked> Need both the scorebug and the logo gone</label>
-        <label class="inline">Call a break once they're all gone for
+        <label class="inline">Call a break once both are gone for
           <select id="detect-missing">
             <option value="2">2 s</option>
             <option value="3">3 s</option>
@@ -71,9 +74,10 @@
           </select>
         </label>
         <div class="actions">
-          <button id="detect-relearn" type="button" title="Forgets the scorebug and logo it learned and looks for them again (about 30 s of game)">Relearn</button>
+          <button id="detect-relearn" type="button" title="Press during normal play: the detector needs about 30 seconds of the game with the scorebug and the network logo on screen. Not during a commercial, a replay or halftime.">Learn scorebug &amp; logo</button>
         </div>
         <p id="detect-status" class="muted small"></p>
+        </div>
       </div>
     </details>
     <!-- Casting stays in view: it's what the menu is opened for most. -->

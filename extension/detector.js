@@ -72,9 +72,10 @@
         lastTime = null;
         worker.postMessage({ type: 'reset' });
       },
+      // Learns the overlays over the next 40 s of video. Only when asked: the viewer knows when
+      // the game is on.
       relearn() {
-        lastTime = null;
-        worker.postMessage({ type: 'reset' });
+        worker.postMessage({ type: 'learn' });
       },
       setOptions(options) {
         worker.postMessage({ type: 'options', options });

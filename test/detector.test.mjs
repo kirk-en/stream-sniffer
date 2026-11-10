@@ -9,6 +9,12 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 vm.runInThisContext(fs.readFileSync(path.join(here, '../extension/detector-core.js'), 'utf8'));
 const { Analyzer, W, H } = globalThis.DetectorCore;
+// An analyzer with learning started, as the player's Learn button does.
+function learner(options) {
+  const a = new Analyzer(options);
+  a.relearn();
+  return a;
+}
 
 let failed = 0;
 function assert(ok, what) {
@@ -75,7 +81,7 @@ const changes = (out) => out.filter((x) => typeof x === 'object');
 
 // 1. Learning, a break, and the game coming back.
 {
-  const a = new Analyzer();
+  const a = learner();
   const out = run(a, 60, {});
   const r = out.last;
   const bug = r.overlays.find((o) => o.kind === 'scorebug');
@@ -113,14 +119,14 @@ const changes = (out) => out.filter((x) => typeof x === 'object');
 
 // 2. The network logo still up while the scorebug is gone (a replay, halftime): not a break.
 {
-  const a = new Analyzer({ missingS: 4 });
+  const a = learner({ missingS: 4 });
   const out = run(a, 60, {});
   run(a, 30, { bug: false }, out);
   assert(!changes(out).some((c) => c.to === 'commercial'), 'scorebug gone 30 s, logo still on screen: no break');
   run(a, 30, { logo: false }, out);
   assert(!changes(out).some((c) => c.to === 'commercial'), 'logo gone 30 s, scorebug still on screen: no break');
   // Gone one after the other, never both for 4 s: still no break.
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 2; i++) {
     run(a, 3, { bug: false }, out);
     run(a, 3, { logo: false }, out);
   }
@@ -132,21 +138,19 @@ const changes = (out) => out.filter((x) => typeof x === 'object');
 
 // 3. Only a scorebug (no logo learned): no break is called; it waits for the logo.
 {
-  const a = new Analyzer();
+  const a = learner();
   const out = run(a, 60, { logo: false });
   assert(out.last.state === 'learning' && out.last.waitingFor === 'the network logo', `waits for the logo (${out.last.state}, waiting for ${out.last.waitingFor})`);
   run(a, 30, { bug: false, logo: false }, out);
   assert(!changes(out).some((c) => c.to === 'commercial'), 'the scorebug gone with no logo learned: no break');
-  const b = new Analyzer({ needBoth: false });
-  const out2 = run(b, 60, { logo: false });
-  run(b, 10, { bug: false, logo: false }, out2);
-  assert(changes(out2).some((c) => c.to === 'commercial'), 'with needBoth off, the scorebug alone can call one');
+  const ended = out.find((x) => typeof x === 'string' && /learning ended without finding the network logo/.test(x));
+  assert(!!ended, `when learning ends it says what it didn't find: ${ended}`);
 }
 
 // 4. A site's watermark that never leaves: ignored after it stays through 3 break-length
 // stretches without the scorebug, while the network's logo goes in each.
 {
-  const a = new Analyzer();
+  const a = learner();
   const out = run(a, 60, { watermark: true });
   assert(out.last.overlays.length === 3, `learns scorebug, logo and the watermark (${out.last.overlays.map((o) => o.place).join(', ')})`);
   for (let i = 0; i < 3; i++) {
@@ -159,25 +163,73 @@ const changes = (out) => out.filter((x) => typeof x === 'object');
   assert(!out.last.overlays.find((o) => o.place === 'top-right').watermark, "the network's logo isn't taken for a watermark");
   run(a, 10, { bug: false, logo: false, watermark: true }, out);
   assert(changes(out).some((c) => c.to === 'commercial'), 'then breaks are called');
+  run(a, 10, { watermark: true }, out);
+  a.relearn();
+  run(a, 45, { watermark: true }, out);
+  const kept = out.last.overlays.map((o) => o.place).sort().join(', ');
+  assert(kept === 'bottom-middle, top-right', `after Learn again, the watermark isn't learned again (${kept})`);
 
   // Halftime: a long stretch without the scorebug, network logo up the whole time. Not a watermark.
-  const h = new Analyzer();
+  const h = learner();
   const out2 = run(h, 60, {});
   run(h, 600, { bug: false }, out2);
   run(h, 10, {}, out2);
   assert(!out2.last.overlays.some((o) => o.watermark), "10 min of halftime with the network's logo up: still not a watermark");
 }
 
-// 5. A break with no learning yet: nothing is called before anything is learned.
+// 5. Nothing is learned until Learn is pressed, and learning stops after 40 s.
 {
   const a = new Analyzer();
+  const out = run(a, 60, {});
+  assert(out.last.overlays.length === 0 && out.last.state === 'learning' && out.last.learnLeft === 0, `60 s of game without pressing Learn: nothing learned (${out.last.overlays.length})`);
+  a.relearn();
+  const r = a.push(frame({}), 0.5);
+  assert(r.learnLeft > 39, `Learn starts 40 s of learning (${r.learnLeft} s left)`);
+  run(a, 10, {}, out);
+  assert(out.last.overlays.length === 2 && out.last.state === 'game', `with the overlays already steady, it finds both within 10 s (${out.last.overlays.length}, ${out.last.state})`);
+  run(a, 40, {}, out);
+  assert(out.some((x) => typeof x === 'string' && /learning done/.test(x)) && out.last.learnLeft === 0, 'and says when learning is done');
+}
+
+// 6. Shaky detection: flagged, and no more breaks until relearned.
+{
+  // An overlay that keeps flickering.
+  const a = learner();
+  const out = run(a, 60, {});
+  for (let i = 0; i < 6; i++) {
+    run(a, 2, { logo: false }, out);
+    run(a, 3, {}, out);
+  }
+  const flag = changes(out).find((c) => c.to === 'unsure');
+  assert(!!flag && /flickering/.test(flag.reasons[0]), `a flickering logo is flagged: ${flag?.reasons[0]}`);
+  run(a, 20, { bug: false, logo: false }, out);
+  assert(!changes(out).some((c) => c.to === 'commercial'), 'and no break is called after that');
+  a.relearn();
+  run(a, 30, {}, out);
+  assert(out.last.state === 'game', `Relearn clears it (${out.last.state})`);
+
+  // Two breaks too short to be real.
+  const b = learner();
+  const out2 = run(b, 60, {});
+  for (let i = 0; i < 2; i++) {
+    run(b, 12, { bug: false, logo: false }, out2);
+    run(b, 40, {}, out2);
+  }
+  const flag2 = changes(out2).find((c) => c.to === 'unsure');
+  assert(!!flag2 && /under 20 s/.test(flag2.reasons[0]), `two 10 s "breaks" are flagged: ${flag2?.reasons[0]}`);
+
+}
+
+// 7. A break with no learning yet: nothing is called before anything is learned.
+{
+  const a = learner();
   const out = run(a, 20, { bug: false, logo: false });
   assert(!changes(out).length && out.last.state === 'learning', `no overlays yet: still learning (${out.last.state})`);
 }
 
-// 6. Cost: one frame's analysis, on this machine.
+// 8. Cost: one frame's analysis, on this machine.
 {
-  const a = new Analyzer();
+  const a = learner();
   run(a, 60, {});
   const f = frame({});
   const t0 = performance.now();

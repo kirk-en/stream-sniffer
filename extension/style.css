@@ -132,8 +132,19 @@ body.player { background: #000; overflow: hidden; }
 }
 .player #overlay-boxes div.top span { bottom: auto; top: 100%; }
 .player #menu .detect { display: grid; gap: 8px; margin-top: 8px; }
+.player #menu #detect-options { margin-top: 0; padding-left: 22px; }
+.player #menu #detect-options[hidden] { display: none; }
 .player #menu label.inline { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .player #menu label.inline select { padding: 2px 6px; }
+/* The detector's Learn button: top left, above the ad-break log. */
+.player #learn-btn {
+  pointer-events: auto; padding: 6px 12px; font-size: 13px; font-weight: 600; border: none; border-radius: 6px;
+  background: #2d5bd7; color: #fff; cursor: pointer;
+}
+.player #learn-btn[hidden] { display: none; }
+.player #learn-btn.busy { background: #3a3f47; cursor: default; }
+.player #learn-btn.warn { background: #c76a00; }
+.player #learn-btn.done { background: rgba(0, 0, 0, 0.6); font-weight: 400; font-size: 12px; padding: 3px 10px; }
 /* The ad-break log: top left, under any problems, and not hidden with the bar. */
 .player #cues {
   pointer-events: auto; width: min(560px, calc(100vw - 88px)); box-sizing: border-box;
@@ -145,7 +156,9 @@ body.player { background: #000; overflow: hidden; }
 .player #cues .state { padding: 1px 8px; border-radius: 10px; font-size: 12px; background: #3a3f47; color: #fff; white-space: nowrap; }
 .player #cues .state.game { background: #1f7a3a; }
 .player #cues .state.commercial { background: #b3261e; }
-.player #cues li.commercial, .player #cues li.game { padding: 4px 6px; border-radius: 4px; margin: 2px 0; }
+.player #cues .state.unsure { background: #c76a00; }
+.player #cues li.commercial, .player #cues li.game, .player #cues li.unsure { padding: 4px 6px; border-radius: 4px; margin: 2px 0; }
+.player #cues li.unsure { background: rgba(199, 106, 0, 0.5); }
 .player #cues li.commercial { background: rgba(179, 38, 30, 0.45); }
 .player #cues li.game { background: rgba(31, 122, 58, 0.45); }
 .player #cues .headline { font-weight: 700; font-size: 14px; color: #fff; }

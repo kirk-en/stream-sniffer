@@ -24,6 +24,13 @@
   const CONFIRM_SIGHTINGS = 3; // a cluster found this many times running becomes an overlay
   const PRESENT_T = 0.35; // match score at or above: the overlay is on screen
   const ABSENT_T = 0.2; // below: it's gone (in between: as it was)
+  const LEARN_S = 40; // how long learning runs after it's asked for (see relearn)
+  // When the detection is too shaky to trust (see health): it stops calling breaks until relearned.
+  const CHECK_S = 10; // after learning, each overlay is watched this long...
+  const WEAK_T = 0.4; // ...and has to match at least this well on average
+  const FLICKER_MAX = 8; // seen/gone changes in a minute that make an overlay untrustworthy
+  const SHORT_BREAK_S = 20; // real ad breaks are longer than this...
+  const SHORT_BREAKS_MAX = 2; // ...and this many shorter ones within 10 min means it's misreading
   const FORGET_AFTER_S = 15 * 60; // an overlay gone this long is forgotten (new channel, say)
   // A site's watermark: a logo that stays through breaks. Judged on stretches without the
   // scorebug that are break-length (a replay is shorter; halftime, with the network's logo up
@@ -92,8 +99,7 @@
       this.grown = new Uint8Array(N);
       this.label = new Int32Array(N);
       this.queue = new Int32Array(N);
-      // needBoth: a break only once both a scorebug and a network logo are learned, and both gone.
-      this.options = { missingS: 4, returnS: 2, needBoth: true, ...options };
+      this.options = { missingS: 4, returnS: 2, ...options };
       this.reset();
     }
 
@@ -116,6 +122,64 @@
       this.blacks = []; // times of black frames
       this.cuts = []; // times of scene cuts
       this.bugGone = null; // the current stretch without the scorebug: { length, logos: Map(logo -> time present) }
+      this.learnUntil = 0; // new overlays are learned only until this time (see relearn)
+      this.learnEndNoted = true;
+      this.watermarks = []; // boxes of logos found to be a site's watermark, kept across relearning
+      this.clearHealth();
+    }
+
+    // Learns the overlays afresh, for the next LEARN_S seconds of video. Nothing is learned
+    // otherwise: only the viewer knows the game is on (not a break, a replay, or halftime). The
+    // running average of edges keeps going all along, so overlays that were already steady are
+    // found within seconds. Watermarks already found stay ignored.
+    relearn() {
+      this.overlays = [];
+      this.candidates = [];
+      this.state = 'learning';
+      this.goneFor = 0;
+      this.bugGone = null;
+      this.learnUntil = this.t + LEARN_S;
+      this.learnEndNoted = false;
+      this.clearHealth();
+    }
+
+    clearHealth() {
+      this.unreliable = ''; // why the detection isn't trusted, or ''
+      this.checkUntil = null; // the end of the check after learning
+      this.checkScores = new Map(); // overlay -> { sum, n } during that check
+      this.shortBreaks = []; // times of breaks shorter than SHORT_BREAK_S
+    }
+
+    // Decides whether the detection can be trusted. Shaky detection is worse than none: it would
+    // call breaks that aren't there. Once untrusted, it stays so until relearned.
+    health(watched) {
+      if (this.unreliable) return;
+      for (const o of watched) {
+        while (o.flips.length && o.flips[0] < this.t - 60) o.flips.shift();
+        if (o.flips.length >= FLICKER_MAX) {
+          this.unreliable = `the ${this.describe(o)} kept flickering between seen and gone (${o.flips.length} times in a minute)`;
+          return;
+        }
+      }
+      if (this.checkUntil == null) return;
+      if (this.t < this.checkUntil) {
+        for (const o of watched) {
+          const c = this.checkScores.get(o) ?? { sum: 0, n: 0 };
+          c.sum += o.score;
+          c.n++;
+          this.checkScores.set(o, c);
+        }
+        return;
+      }
+      this.checkUntil = null;
+      for (const o of watched) {
+        const c = this.checkScores.get(o);
+        const avg = c ? c.sum / c.n : 0;
+        if (avg < WEAK_T) {
+          this.unreliable = `the ${this.describe(o)} only matched weakly after learning (average ${avg.toFixed(2)}; it needs ${WEAK_T} or more)`;
+          return;
+        }
+      }
     }
 
     // One frame: rgba is W x H x 4 bytes; dt is the seconds of video since the last frame.
@@ -176,6 +240,13 @@
       this.forget(events);
       this.spotWatermarks(dt, events);
       const change = this.decide(dt);
+      if (!this.learnEndNoted && this.t >= this.learnUntil) {
+        this.learnEndNoted = true;
+        const missing = this.missing(this.overlays.filter((o) => !o.watermark));
+        events.push(missing
+          ? `learning ended without finding ${missing}. Press Learn again during normal play, with the scorebug and the network logo on screen`
+          : 'learning done');
+      }
       return {
         t: this.t,
         state: this.state,
@@ -194,6 +265,8 @@
           watermark: o.watermark,
         })),
         learning: this.candidates.map((c) => ({ kind: c.kind, sightings: c.sightings })),
+        learnLeft: Math.max(0, this.learnUntil - this.t), // seconds of learning left
+        unreliable: this.unreliable, // why it isn't trusted (state 'unsure'), or ''
         waitingFor: this.waitingFor ?? '',
       };
     }
@@ -269,11 +342,16 @@
         // on screen.
         const known = this.overlays.find((o) => o.kind === f.kind && iou(o.box, f.box) > 0.3);
         if (known) {
-          if (known.present) Object.assign(known, { box: f.box, mask: f.mask, far: farFrom(f.mask, f.box.w, f.box.h), count: f.count, place: placeOf(f.box) });
+          // Only while it's clearly there (a moment's flicker in a break would swap in noise), and
+          // only for an outline at least about as full: after a break the running average has
+          // forgotten most of it, and a part would replace the whole.
+          if (known.present && known.backFor >= 5 && known.score >= 0.6 && f.count >= known.count * 0.8) Object.assign(known, { box: f.box, mask: f.mask, far: farFrom(f.mask, f.box.w, f.box.h), count: f.count, place: placeOf(f.box) });
           continue;
         }
-        // Nothing new is learned in a break: an ad's own steady graphic would end it.
-        if (this.state === 'commercial') continue;
+        // New ones only while learning was asked for, and never in a break (an ad's own steady
+        // graphic would end it), and not a watermark already found.
+        if (this.t >= this.learnUntil || this.state === 'commercial') continue;
+        if (f.kind === 'logo' && this.watermarks.some((b) => iou(b, f.box) > 0.3)) continue;
         const cand = this.candidates.find((c) => c.kind === f.kind && iou(c.box, f.box) > 0.3);
         if (!cand) {
           this.candidates.push({ ...f, sightings: 1, seenAt: this.t });
@@ -302,6 +380,7 @@
         goneFor: 0,
         backFor: 0,
         watermark: false,
+        flips: [], // times it changed between seen and gone, for the last minute
         stayedThrough: 0, // break-length stretches without the scorebug this logo stayed through
         leftDuring: 0, // and ones it went during
       };
@@ -360,24 +439,24 @@
         }
       }
       if (!n) return 0;
-      if (nRest < 20) {
-        // The ring: 3 to 5 px outside the box, inside the picture.
-        rest = 0;
-        nRest = 0;
-        for (let y = box.y - 5; y < box.y + box.h + 5; y++) {
-          if (y < 0 || y >= H) continue;
-          for (let x = box.x - 5; x < box.x + box.w + 5; x++) {
-            if (x < 0 || x >= W) continue;
-            const out = Math.max(box.x - x, x - (box.x + box.w - 1), box.y - y, y - (box.y + box.h - 1));
-            if (out < 3) continue;
-            nRest++;
-            rest += peak(x, y);
-          }
+      // The ring: 3 to 5 px outside the box, inside the picture.
+      let ring = 0;
+      let nRing = 0;
+      for (let y = box.y - 5; y < box.y + box.h + 5; y++) {
+        if (y < 0 || y >= H) continue;
+        for (let x = box.x - 5; x < box.x + box.w + 5; x++) {
+          if (x < 0 || x >= W) continue;
+          const out = Math.max(box.x - x, x - (box.x + box.w - 1), box.y - y, y - (box.y + box.h - 1));
+          if (out < 3) continue;
+          nRing++;
+          ring += peak(x, y);
         }
       }
-      if (!nRest) return 0;
+      if (!nRing && !nRest) return 0;
+      // Compared with the panel and the ring alike, when there's enough panel to go by: no cut-off
+      // to flip between, which a few pixels' difference in scaling would cross.
+      const b = nRest >= 20 && nRing ? (rest / nRest + ring / nRing) / 2 : nRing ? ring / nRing : rest / nRest;
       const a = line / n;
-      const b = rest / nRest;
       // A flat, dark moment (a fade) has no edges anywhere: that's not the overlay being there.
       if (a < EDGE_T) return Math.min(0, (a - b) / (a + b + 1));
       return (a - b) / (a + b + 1);
@@ -390,6 +469,7 @@
       const was = o.present;
       if (o.score >= PRESENT_T) o.present = true;
       else if (o.score < ABSENT_T) o.present = false;
+      if (o.present !== was) o.flips.push(this.t);
       if (o.present) {
         o.goneFor = 0;
         o.backFor = was ? o.backFor + dt : dt;
@@ -430,28 +510,36 @@
         else o.leftDuring++;
         if (o.stayedThrough >= WATERMARK_BREAKS && !o.leftDuring) {
           o.watermark = true;
+          this.watermarks.push(o.box);
           events.push(`ignoring the ${this.describe(o)}: it stayed on screen through ${o.stayedThrough} breaks without the scorebug, so it's likely the site's watermark, not the network's logo`);
         }
       }
     }
 
-    // What a break needs and doesn't have yet, or '' when breaks can be called.
+    // What a break needs and doesn't have yet, or '' when breaks can be called. A break is only
+    // called with both a scorebug and a network logo learned, and both gone.
     missing(watched) {
       const bug = watched.some((o) => o.kind === 'scorebug');
       const logo = watched.some((o) => o.kind === 'logo');
-      if (this.options.needBoth) {
-        if (!bug && !logo) return 'the scorebug and the network logo';
-        if (!bug) return 'the scorebug';
-        if (!logo) return 'the network logo';
-        return '';
-      }
-      return bug || logo ? '' : 'the scorebug or the network logo';
+      if (!bug && !logo) return 'the scorebug and the network logo';
+      if (!bug) return 'the scorebug';
+      if (!logo) return 'the network logo';
+      return '';
     }
 
     // is_commercial: everything watched (the scorebug and the network logo) gone for missingS
     // starts a break; any of them back for returnS ends it.
     decide(dt) {
       const watched = this.overlays.filter((o) => !o.watermark);
+      this.health(watched);
+      if (this.unreliable) {
+        // No calls until relearned: say so once.
+        if (this.state === 'unsure') return null;
+        const was = this.state;
+        this.state = 'unsure';
+        this.goneFor = 0;
+        return { to: 'unsure', from: was, reasons: [this.unreliable] };
+      }
       const missing = this.missing(watched);
       this.waitingFor = missing;
       if (missing) {
@@ -463,6 +551,8 @@
       }
       if (this.state === 'learning') {
         this.state = 'game';
+        this.checkUntil = this.t + CHECK_S;
+        this.checkScores = new Map();
         return { to: 'game', from: 'learning', reasons: [`watching the ${watched.map((o) => this.describe(o)).join(' and the ')}`] };
       }
       const allGone = watched.every((o) => !o.present);
@@ -485,7 +575,15 @@
       this.state = 'game';
       this.goneFor = 0;
       const reasons = back.map((o) => `${this.describe(o)} back for ${fmt(o.backFor)} (match ${o.score.toFixed(2)})`);
-      reasons.push(`the break lasted ${fmt(this.t - this.breakStart - back[0].backFor)}`);
+      const lasted = this.t - this.breakStart - back[0].backFor;
+      reasons.push(`the break lasted ${fmt(lasted)}`);
+      if (lasted < SHORT_BREAK_S) {
+        this.shortBreaks.push(this.t);
+        this.shortBreaks = this.shortBreaks.filter((t) => t >= this.t - 600);
+        if (this.shortBreaks.length >= SHORT_BREAKS_MAX) {
+          this.unreliable = `${this.shortBreaks.length} "breaks" under ${SHORT_BREAK_S} s within 10 minutes; real ad breaks are longer`;
+        }
+      }
       return { to: 'game', from: 'commercial', reasons };
     }
   }

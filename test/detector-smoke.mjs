@@ -82,6 +82,20 @@ async function main() {
 
     // Each look's cost, and what's in the boxes, while the game plays with its overlays.
     const at = async (t) => page.waitForFunction((t) => document.querySelector('video.big')?.currentTime >= t, { timeout: (t + 30) * 1000, polling: 500 }, t);
+
+    // Nothing is learned by itself: the Learn button at the top left starts it.
+    await at(8);
+    const idle = await page.evaluate(() => ({
+      overlays: document.querySelectorAll('#overlay-boxes div').length,
+      button: document.getElementById('learn-btn').textContent,
+      shown: !document.getElementById('learn-btn').hidden,
+      tip: document.getElementById('learn-btn').title,
+    }));
+    assert(idle.shown && /Learn scorebug/.test(idle.button) && /normal play/.test(idle.tip), `a Learn button is on screen, with a tip to use it in normal play ("${idle.button}")`);
+    assert(idle.overlays === 0, `before it's pressed, nothing is learned (${idle.overlays} boxes at 8 s)`);
+    await page.click('#learn-btn');
+    await page.waitForFunction(() => /Learning…/.test(document.getElementById('learn-btn').textContent), { timeout: 5000 });
+    console.log('     pressed Learn at 8 s');
     await at(GAME_END - 3);
     const during = await page.evaluate(() => ({
       boxes: [...document.querySelectorAll('#overlay-boxes div')].map((d) => `${d.classList.contains('gone') ? 'gone' : d.classList.contains('watermark') ? 'watermark' : 'present'}: ${d.textContent}`),
@@ -107,6 +121,8 @@ async function main() {
     const start = log.find((l) => /📺 COMMERCIAL: is_commercial = true/.test(l));
     const end = log.find((l) => /🏈 GAME BACK: is_commercial = false/.test(l));
     const afterBadge = await badge();
+    const btn = await page.evaluate(() => document.getElementById('learn-btn').textContent);
+    assert(/Relearn/.test(btn), `once learned, the button offers Relearn ("${btn}")`);
     assert(/🏈 GAME/.test(afterBadge), `after it, the badge says the game ("${afterBadge}")`);
     const highlighted = await page.evaluate(() => [...document.querySelectorAll('#cue-list li.commercial, #cue-list li.game')].length);
     assert(highlighted === 2, `the two changes are highlighted lines (${highlighted})`);
@@ -119,6 +135,16 @@ async function main() {
     console.log(`     frames: ${quality.totalVideoFrames} shown, ${quality.droppedVideoFrames} dropped`);
     const status = await page.evaluate(() => document.getElementById('detect-status').textContent);
     console.log(`     status: ${status}`);
+    // "Watch the picture" off: the settings under it, and the Learn button, go away.
+    const offState = await page.evaluate(() => {
+      const shown = (id) => !document.getElementById(id).hidden;
+      const before = shown('detect-options');
+      const box = document.getElementById('detect-on');
+      box.checked = false;
+      box.dispatchEvent(new Event('change'));
+      return { before, options: shown('detect-options'), learn: shown('learn-btn'), boxes: document.querySelectorAll('#overlay-boxes div').length };
+    });
+    assert(offState.before && !offState.options && !offState.learn && !offState.boxes, `turning it off hides its settings, the Learn button and the boxes (${JSON.stringify(offState)})`);
     assert(!errors.length, `no page errors (${errors.join(' | ')})`);
   } finally {
     await browser.close();

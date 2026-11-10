@@ -1018,12 +1018,12 @@ const detectEls = {
   on: document.getElementById('detect-on'),
   draw: document.getElementById('detect-draw'),
   log: document.getElementById('detect-log'),
-  both: document.getElementById('detect-both'),
+  options: document.getElementById('detect-options'),
   missing: document.getElementById('detect-missing'),
   status: document.getElementById('detect-status'),
 };
 const overlayBoxes = document.getElementById('overlay-boxes');
-let detect = { on: false, draw: false, log: false, missingS: 4, needBoth: true };
+let detect = { on: false, draw: false, log: false, missingS: 4 };
 let detectLast = null; // the latest result
 let detectError = '';
 const detectCost = []; // the last few samples' { grabMs, workMs }
@@ -1043,16 +1043,32 @@ function detectResult(r) {
   detectCost.push({ grabMs: r.grabMs, workMs: r.workMs });
   if (detectCost.length > 20) detectCost.shift();
   const s = big();
+  // Detection too shaky to trust: always said, whether or not breaks are logged, since it needs
+  // the viewer to relearn.
+  if (r.change?.to === 'unsure' && s) {
+    const was = r.change.from === 'commercial' ? ' (it was in a break)' : '';
+    cueEvent(s, `⚠️ DETECTION UNRELIABLE: is_commercial paused${was}. Why: ${r.change.reasons.join('; ')}. Press Relearn during normal play, with the scorebug and the network logo on screen.`, 'unsure');
+  }
   if (detect.log && s) {
     for (const e of r.events) {
-      const emoji = /^learned/.test(e) ? '🧠' : /^ignoring/.test(e) ? '🙈' : /^forgot/.test(e) ? '🗑️' : 'ℹ️';
+      const emoji = /^learned/.test(e)
+        ? '🧠'
+        : /^learning ended without/.test(e)
+          ? '⚠️'
+          : /^learning done/.test(e)
+            ? '✅'
+            : /^ignoring/.test(e)
+              ? '🙈'
+              : /^forgot/.test(e)
+                ? '🗑️'
+                : 'ℹ️';
       cueEvent(s, `${emoji} detector: ${e}`, 'note');
     }
     const c = r.change;
     if (c?.to === 'commercial') cueEvent(s, `📺 COMMERCIAL: is_commercial = true. Why: ${c.reasons.join('; ')}`, 'commercial');
     else if (c?.to === 'game' && c.from === 'commercial') cueEvent(s, `🏈 GAME BACK: is_commercial = false. Why: ${c.reasons.join('; ')}`, 'game');
     else if (c?.to === 'game') cueEvent(s, `👀 detector: ready, ${c.reasons.join('; ')}`, 'note');
-    else if (c) cueEvent(s, `⏳ detector: waiting again (${c.reasons.join('; ')})`, 'note');
+    else if (c && c.to !== 'unsure') cueEvent(s, `⏳ detector: waiting again (${c.reasons.join('; ')})`, 'note');
   }
   drawOverlayBoxes();
   renderDetect();
@@ -1066,8 +1082,45 @@ function renderDetectState() {
   if (detectState.hidden) return;
   detectState.className = `state ${r.state}`;
   detectState.textContent =
-    r.state === 'commercial' ? '📺 COMMERCIAL' : r.state === 'game' ? '🏈 GAME' : `🧠 LEARNING${r.waitingFor ? `: needs ${r.waitingFor}` : ''}`;
+    r.state === 'commercial'
+      ? '📺 COMMERCIAL'
+      : r.state === 'unsure'
+        ? '⚠️ UNRELIABLE: relearn'
+        : r.state === 'game'
+        ? '🏈 GAME'
+        : r.learnLeft > 0
+          ? `🧠 LEARNING… ${Math.ceil(r.learnLeft)} s`
+          : '⏸️ NOT LEARNED: press Learn';
 }
+
+// The Learn button over the video. Nothing is learned until it's pressed: only the viewer knows
+// the game is on (not a break, a replay or halftime).
+const learnBtn = document.getElementById('learn-btn');
+function renderLearnBtn() {
+  const r = detectLast;
+  learnBtn.hidden = !detect.on;
+  if (learnBtn.hidden) return;
+  const learning = r?.learnLeft > 0;
+  const ready = r && (r.state === 'game' || r.state === 'commercial');
+  const unsure = r?.state === 'unsure';
+  learnBtn.disabled = learning;
+  learnBtn.className = `learn${learning ? ' busy' : unsure ? ' warn' : ready ? ' done' : ''}`;
+  learnBtn.textContent = learning
+    ? `🧠 Learning… ${Math.ceil(r.learnLeft)} s`
+    : unsure
+      ? '⚠️ Relearn during normal play'
+      : ready
+        ? '🔄 Relearn'
+        : '🧠 Learn scorebug & logo';
+}
+function learnNow() {
+  if (!detect.on) return;
+  detector.relearn();
+  const msg = 'detector: learning the scorebug and logo over the next 40 s of play';
+  if (detect.log && big()) cueEvent(big(), `🧠 ${msg}`, 'note');
+  else logEvent(big() ?? null, msg);
+}
+learnBtn.addEventListener('click', learnNow);
 
 // Boxes over the video, where the picture's content is (object-fit: contain leaves bars).
 function drawOverlayBoxes() {
@@ -1102,6 +1155,7 @@ addEventListener('resize', drawOverlayBoxes);
 
 function renderDetect() {
   renderDetectState();
+  renderLearnBtn();
   const el = detectEls.status;
   if (!detect.on) return (el.textContent = '');
   if (detectError) return (el.textContent = `Detector: ${detectError}`);
@@ -1109,9 +1163,13 @@ function renderDetect() {
   if (!r) return (el.textContent = 'Starting… (it waits while the video is paused or the tab is hidden)');
   const watched = r.overlays.filter((o) => !o.watermark).map((o) => `${o.kind} ${o.place}${o.present ? '' : ' (gone)'}`);
   const state =
-    r.state === 'learning'
-      ? `Learning: looking for overlays that stay put (about 30 s of game)${r.waitingFor ? `; still needs ${r.waitingFor}` : ''}${r.learning.length ? `; ${r.learning.length} maybe` : ''}`
-      : `${r.state === 'commercial' ? 'Commercial break' : 'Game'}; watching ${watched.join(', ')}`;
+    r.state === 'unsure'
+      ? `Not trusted, so no breaks are called: ${r.unreliable}. Press Relearn (top left) during normal play`
+      : r.state !== 'learning'
+      ? `${r.state === 'commercial' ? 'Commercial break' : 'Game'}; watching ${watched.join(', ')}`
+      : r.learnLeft > 0
+        ? `Learning for ${Math.ceil(r.learnLeft)} s more: looking for overlays that stay put; still needs ${r.waitingFor}`
+        : `Not watching yet: press Learn (top left) during normal play${r.overlays.length ? `; it still needs ${r.waitingFor}` : ''}`;
   const avg = (k) => detectCost.reduce((a, c) => a + c[k], 0) / detectCost.length;
   el.textContent = `${state}. Per look (twice a second): ${avg('grabMs').toFixed(1)} ms to copy the picture (GPU, not blocking), ${avg('workMs').toFixed(1)} ms of analysis in a worker. Lost frames are counted in the stream's details above.`;
 }
@@ -1120,9 +1178,9 @@ function applyDetect() {
   detectEls.on.checked = detect.on;
   detectEls.draw.checked = detect.draw;
   detectEls.log.checked = detect.log;
-  detectEls.both.checked = detect.needBoth;
+  detectEls.options.hidden = !detect.on; // the rest only matters while it watches
   detectEls.missing.value = String(detect.missingS);
-  detector.setOptions({ missingS: detect.missingS, needBoth: detect.needBoth });
+  detector.setOptions({ missingS: detect.missingS });
   if (detect.on) detector.start();
   else {
     detector.stop();
@@ -1139,7 +1197,8 @@ function saveDetect() {
 chrome.storage.local
   .get('detect')
   .then(({ detect: saved }) => {
-    detect = { ...detect, ...saved };
+    const { needBoth, ...rest } = saved ?? {}; // needBoth: a switch no longer offered
+    detect = { ...detect, ...rest };
     applyDetect();
   })
   .catch((err) => failPage(`Couldn't read the commercial detection settings: ${err.message}`));
@@ -1157,22 +1216,11 @@ detectEls.log.addEventListener('change', () => {
   logEvent(null, `is_commercial logging turned ${detect.log ? 'on' : 'off'}`);
   saveDetect();
 });
-detectEls.both.addEventListener('change', () => {
-  detect.needBoth = detectEls.both.checked;
-  saveDetect();
-});
 detectEls.missing.addEventListener('change', () => {
   detect.missingS = Number(detectEls.missing.value);
   saveDetect();
 });
-document.getElementById('detect-relearn').addEventListener('click', () => {
-  detector.relearn();
-  detectLast = null;
-  if (detect.log && big()) cueEvent(big(), '🔄 detector: relearning the scorebug and logo', 'note');
-  else logEvent(big() ?? null, 'detector: relearning the scorebug and logo');
-  drawOverlayBoxes();
-  renderDetect();
-});
+document.getElementById('detect-relearn').addEventListener('click', learnNow);
 
 // Playlist tags that carry or hint at ad breaks. hls.js keeps tags it doesn't use on the segment
 // they come before (frag.tagList), as [name, value]; a discontinuity is ["DIS"].
@@ -1202,7 +1250,7 @@ function cueEvent(s, text, kind = '') {
   const place = streams.indexOf(s) === 0 ? '' : ' small';
   when.textContent = `${new Date().toLocaleTimeString(undefined, { hour12: false })}${place}`;
   li.append(when);
-  if (kind === 'commercial' || kind === 'game') {
+  if (kind === 'commercial' || kind === 'game' || kind === 'unsure') {
     li.className = kind;
     const [headline, why] = text.split(' Why: ');
     const h = document.createElement('span');
@@ -1221,7 +1269,7 @@ function cueEvent(s, text, kind = '') {
   }
   cueList.prepend(li);
   while (cueList.children.length > CUE_BOX_MAX) cueList.lastChild.remove();
-  const n = cueList.querySelectorAll('li.commercial, li.game, span.break').length;
+  const n = cueList.querySelectorAll('li.commercial, li.game, li.unsure, span.break').length;
   cueCount.textContent = n ? `(${n})` : '';
   cueBox.hidden = false;
 }
