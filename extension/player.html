@@ -34,13 +34,16 @@
   </div>
 
   <!-- Errors and buffering, over the video, only while something is wrong. -->
-  <div id="problems"></div>
   <!-- What the detector found: boxes over the scorebug and logo (Draw boxes). -->
   <div id="overlay-boxes"></div>
-  <!-- Ad-break cues and is_commercial changes as they come. Stays up until closed. -->
-  <div id="cues" hidden>
-    <p class="head"><span>Ad breaks <span id="cue-count"></span></span><button id="cues-close" type="button" class="dismiss" aria-label="Close" title="Close (the cues stay in Copy log)">×</button></p>
-    <ol id="cue-list"></ol>
+  <!-- Top left: problems, then the ad-break log. -->
+  <div id="top-left">
+    <div id="problems"></div>
+    <!-- Ad-break cues and is_commercial changes as they come. Stays up until closed. -->
+    <div id="cues" hidden>
+      <p class="head"><span>Ad breaks <span id="cue-count"></span></span><span id="detect-state" class="state" hidden></span><button id="cues-close" type="button" class="dismiss" aria-label="Close" title="Close (the cues stay in Copy log)">×</button></p>
+      <ol id="cue-list"></ol>
+    </div>
   </div>
 
   <button id="settings" type="button" aria-label="Settings" aria-expanded="false" title="Settings">⚙</button>
@@ -56,7 +59,8 @@
         <!-- The picture-based detector: detector.js, detector-worker.js, detector-core.js. -->
         <label class="toggle" title="About twice a second, looks at a small copy of the big picture for the scorebug and the network logo, off the main thread"><input id="detect-on" type="checkbox"> Watch the picture for the scorebug and network logo</label>
         <label class="toggle" title="Green: on screen. Red, dashed: gone. Grey: taken for the site's watermark and ignored."><input id="detect-draw" type="checkbox"> Draw boxes around what it finds</label>
-        <label class="toggle" title="Writes is_commercial changes, with why, to the box over the video and to Copy log"><input id="detect-log" type="checkbox"> Log commercial breaks (is_commercial), with why</label>
+        <label class="toggle" title="Writes is_commercial changes, with why, to the box at the top left and to Copy log"><input id="detect-log" type="checkbox"> Log commercial breaks (is_commercial), with why</label>
+        <label class="toggle" title="On: a break is called only once both the scorebug and the network logo are learned, and only when both are gone. Off: whichever of them it has learned. Turn off for a broadcast with its logo inside the scorebug."><input id="detect-both" type="checkbox" checked> Need both the scorebug and the logo gone</label>
         <label class="inline">Call a break once they're all gone for
           <select id="detect-missing">
             <option value="2">2 s</option>

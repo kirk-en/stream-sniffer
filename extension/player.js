@@ -1018,11 +1018,12 @@ const detectEls = {
   on: document.getElementById('detect-on'),
   draw: document.getElementById('detect-draw'),
   log: document.getElementById('detect-log'),
+  both: document.getElementById('detect-both'),
   missing: document.getElementById('detect-missing'),
   status: document.getElementById('detect-status'),
 };
 const overlayBoxes = document.getElementById('overlay-boxes');
-let detect = { on: false, draw: false, log: false, missingS: 4 };
+let detect = { on: false, draw: false, log: false, missingS: 4, needBoth: true };
 let detectLast = null; // the latest result
 let detectError = '';
 const detectCost = []; // the last few samples' { grabMs, workMs }
@@ -1043,14 +1044,29 @@ function detectResult(r) {
   if (detectCost.length > 20) detectCost.shift();
   const s = big();
   if (detect.log && s) {
-    for (const e of r.events) cueEvent(s, `detector: ${e}`, 'note');
+    for (const e of r.events) {
+      const emoji = /^learned/.test(e) ? '🧠' : /^ignoring/.test(e) ? '🙈' : /^forgot/.test(e) ? '🗑️' : 'ℹ️';
+      cueEvent(s, `${emoji} detector: ${e}`, 'note');
+    }
     const c = r.change;
-    if (c?.to === 'commercial') cueEvent(s, `is_commercial = true: a commercial break started. Why: ${c.reasons.join('; ')}`, 'break');
-    else if (c?.to === 'game' && c.from === 'commercial') cueEvent(s, `is_commercial = false: the game is back. Why: ${c.reasons.join('; ')}`, 'break');
-    else if (c) cueEvent(s, `detector: ${c.to === 'game' ? 'ready' : 'learning again'} (${c.reasons.join('; ')})`, 'note');
+    if (c?.to === 'commercial') cueEvent(s, `📺 COMMERCIAL: is_commercial = true. Why: ${c.reasons.join('; ')}`, 'commercial');
+    else if (c?.to === 'game' && c.from === 'commercial') cueEvent(s, `🏈 GAME BACK: is_commercial = false. Why: ${c.reasons.join('; ')}`, 'game');
+    else if (c?.to === 'game') cueEvent(s, `👀 detector: ready, ${c.reasons.join('; ')}`, 'note');
+    else if (c) cueEvent(s, `⏳ detector: waiting again (${c.reasons.join('; ')})`, 'note');
   }
   drawOverlayBoxes();
   renderDetect();
+}
+
+// The badge in the ad-break log's header: what the detector thinks right now.
+const detectState = document.getElementById('detect-state');
+function renderDetectState() {
+  const r = detectLast;
+  detectState.hidden = !detect.on || !r;
+  if (detectState.hidden) return;
+  detectState.className = `state ${r.state}`;
+  detectState.textContent =
+    r.state === 'commercial' ? '📺 COMMERCIAL' : r.state === 'game' ? '🏈 GAME' : `🧠 LEARNING${r.waitingFor ? `: needs ${r.waitingFor}` : ''}`;
 }
 
 // Boxes over the video, where the picture's content is (object-fit: contain leaves bars).
@@ -1085,6 +1101,7 @@ function drawOverlayBoxes() {
 addEventListener('resize', drawOverlayBoxes);
 
 function renderDetect() {
+  renderDetectState();
   const el = detectEls.status;
   if (!detect.on) return (el.textContent = '');
   if (detectError) return (el.textContent = `Detector: ${detectError}`);
@@ -1093,7 +1110,7 @@ function renderDetect() {
   const watched = r.overlays.filter((o) => !o.watermark).map((o) => `${o.kind} ${o.place}${o.present ? '' : ' (gone)'}`);
   const state =
     r.state === 'learning'
-      ? `Learning: looking for overlays that stay put (about 30 s of game)${r.learning.length ? `; ${r.learning.length} maybe` : ''}`
+      ? `Learning: looking for overlays that stay put (about 30 s of game)${r.waitingFor ? `; still needs ${r.waitingFor}` : ''}${r.learning.length ? `; ${r.learning.length} maybe` : ''}`
       : `${r.state === 'commercial' ? 'Commercial break' : 'Game'}; watching ${watched.join(', ')}`;
   const avg = (k) => detectCost.reduce((a, c) => a + c[k], 0) / detectCost.length;
   el.textContent = `${state}. Per look (twice a second): ${avg('grabMs').toFixed(1)} ms to copy the picture (GPU, not blocking), ${avg('workMs').toFixed(1)} ms of analysis in a worker. Lost frames are counted in the stream's details above.`;
@@ -1103,8 +1120,9 @@ function applyDetect() {
   detectEls.on.checked = detect.on;
   detectEls.draw.checked = detect.draw;
   detectEls.log.checked = detect.log;
+  detectEls.both.checked = detect.needBoth;
   detectEls.missing.value = String(detect.missingS);
-  detector.setOptions({ missingS: detect.missingS });
+  detector.setOptions({ missingS: detect.missingS, needBoth: detect.needBoth });
   if (detect.on) detector.start();
   else {
     detector.stop();
@@ -1139,6 +1157,10 @@ detectEls.log.addEventListener('change', () => {
   logEvent(null, `is_commercial logging turned ${detect.log ? 'on' : 'off'}`);
   saveDetect();
 });
+detectEls.both.addEventListener('change', () => {
+  detect.needBoth = detectEls.both.checked;
+  saveDetect();
+});
 detectEls.missing.addEventListener('change', () => {
   detect.missingS = Number(detectEls.missing.value);
   saveDetect();
@@ -1146,7 +1168,8 @@ detectEls.missing.addEventListener('change', () => {
 document.getElementById('detect-relearn').addEventListener('click', () => {
   detector.relearn();
   detectLast = null;
-  logEvent(big() ?? null, 'detector: relearning the scorebug and logo');
+  if (detect.log && big()) cueEvent(big(), '🔄 detector: relearning the scorebug and logo', 'note');
+  else logEvent(big() ?? null, 'detector: relearning the scorebug and logo');
   drawOverlayBoxes();
   renderDetect();
 });
@@ -1168,8 +1191,9 @@ document.getElementById('cues-close').addEventListener('click', () => {
   cueBox.hidden = true;
   cueList.replaceChildren();
 });
-// Logs a cue and shows it. kind: 'break' (an ad break starts or ends), 'note' (what a stream
-// carries), or '' (any other cue).
+// Logs a cue and shows it. kind: 'commercial' or 'game' (is_commercial changed: a highlighted
+// line, its reasons under it), 'break' (an ad-break cue), 'note' (what the detector or a stream
+// is doing), or '' (any other cue). The text starts with an emoji saying which, in the log too.
 function cueEvent(s, text, kind = '') {
   logEvent(s, text);
   const li = document.createElement('li');
@@ -1177,14 +1201,27 @@ function cueEvent(s, text, kind = '') {
   when.className = 'when';
   const place = streams.indexOf(s) === 0 ? '' : ' small';
   when.textContent = `${new Date().toLocaleTimeString(undefined, { hour12: false })}${place}`;
-  const what = document.createElement('span');
-  if (kind) what.className = kind;
-  what.textContent = text.length > 220 ? `${text.slice(0, 220)}…` : text;
-  what.title = text;
-  li.append(when, what);
+  li.append(when);
+  if (kind === 'commercial' || kind === 'game') {
+    li.className = kind;
+    const [headline, why] = text.split(' Why: ');
+    const h = document.createElement('span');
+    h.className = 'headline';
+    h.textContent = headline;
+    const w = document.createElement('span');
+    w.className = 'why';
+    w.textContent = why ? `Why: ${why}` : '';
+    li.append(h, w);
+  } else {
+    const what = document.createElement('span');
+    if (kind) what.className = kind;
+    what.textContent = text.length > 220 ? `${text.slice(0, 220)}…` : text;
+    what.title = text;
+    li.append(what);
+  }
   cueList.prepend(li);
   while (cueList.children.length > CUE_BOX_MAX) cueList.lastChild.remove();
-  const n = cueList.querySelectorAll('li > span:not(.when):not(.note)').length;
+  const n = cueList.querySelectorAll('li.commercial, li.game, span.break').length;
   cueCount.textContent = n ? `(${n})` : '';
   cueBox.hidden = false;
 }
@@ -1206,7 +1243,7 @@ function logPlaylistCues(s, details) {
   for (const frag of details.fragments) {
     for (const [name, value = ''] of frag.tagList ?? []) {
       if (name === 'DIS') {
-        if (!seenCue(s, `dis:${frag.sn}`)) cueEvent(s, `cue (playlist): discontinuity ${cueWhere(frag)}; often where an ad is stitched in or out`);
+        if (!seenCue(s, `dis:${frag.sn}`)) cueEvent(s, `✂️ cue (playlist): discontinuity ${cueWhere(frag)}; often where an ad is stitched in or out`);
         continue;
       }
       if (!CUE_TAG.test(name) || seenCue(s, `${frag.sn}:${name}:${value}`)) continue;
@@ -1226,7 +1263,7 @@ function logPlaylistCues(s, details) {
         if (cue) decoded.push(Scte35.describe(cue));
       }
       const shown = value.length > 300 ? `${value.slice(0, 300)}…` : value;
-      const text = `cue (playlist): #${name}${shown ? `:${shown}` : ''} ${cueWhere(frag)}${decoded.map((d) => ` => ${d}`).join('')}`;
+      const text = `📡 cue (playlist): #${name}${shown ? `:${shown}` : ''} ${cueWhere(frag)}${decoded.map((d) => ` => ${d}`).join('')}`;
       cueEvent(s, text, breakKind(text));
     }
   }
@@ -1241,7 +1278,7 @@ function logSegmentCues(s, frag, payload) {
     if (!s.cueTrackNoted) {
       s.cueTrackNoted = true;
       const why = frag.decryptdata?.method && frag.decryptdata.method !== 'NONE' ? 'encrypted' : 'not MPEG-TS (likely fMP4)';
-      cueEvent(s, `cue (video): segments are ${why}, so cues inside the video aren't read; playlist cues still are`, 'note');
+      cueEvent(s, `ℹ️ cue (video): segments are ${why}, so cues inside the video aren't read; playlist cues still are`, 'note');
     }
     return;
   }
@@ -1255,14 +1292,14 @@ function logSegmentCues(s, frag, payload) {
   if (!s.cueTrackNoted) {
     s.cueTrackNoted = true;
     cueEvent(s, found.pid == null
-      ? 'cue (video): segments have no SCTE-35 track'
-      : `cue (video): segments carry a SCTE-35 track (pid 0x${found.pid.toString(16)}); its cues will be logged`, 'note');
+      ? 'ℹ️ cue (video): segments have no SCTE-35 track'
+      : `ℹ️ cue (video): segments carry a SCTE-35 track (pid 0x${found.pid.toString(16)}); its cues will be logged`, 'note');
   }
   for (const section of found.sections) {
     const cue = Scte35.parseSection(section);
     // Encoders repeat a cue over several segments; once is enough.
     if (seenCue(s, cue.hex)) continue;
-    const text = `cue (video): ${Scte35.describe(cue)} (in segment ${frag.sn})`;
+    const text = `📡 cue (video): ${Scte35.describe(cue)} (in segment ${frag.sn})`;
     cueEvent(s, text, breakKind(text));
   }
 }

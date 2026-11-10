@@ -100,7 +100,9 @@ body.player { background: #000; overflow: hidden; }
 .player #quality-menu button::before { content: '✓'; width: 1em; visibility: hidden; }
 .player #quality-menu button[aria-checked='true']::before { visibility: visible; }
 .player #quality-menu .rate { margin-left: auto; color: #aaa; font-size: 11px; }
-.player #problems { position: fixed; top: 12px; left: 12px; right: 64px; z-index: 2; display: grid; gap: 4px; justify-items: start; pointer-events: none; }
+.player #top-left { position: fixed; top: 12px; left: 12px; right: 64px; z-index: 2; display: grid; gap: 6px; justify-items: start; pointer-events: none; }
+.player #problems { display: grid; gap: 4px; justify-items: start; }
+.player #problems:empty { display: none; }
 .player #problems p {
   margin: 0; padding: 4px 4px 4px 8px; border-radius: 6px; background: rgba(0, 0, 0, 0.75); overflow-wrap: anywhere;
   display: flex; align-items: flex-start; gap: 8px;
@@ -132,12 +134,22 @@ body.player { background: #000; overflow: hidden; }
 .player #menu .detect { display: grid; gap: 8px; margin-top: 8px; }
 .player #menu label.inline { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .player #menu label.inline select { padding: 2px 6px; }
-/* Ad-break cues: bottom left, above the bar, and not hidden with it. */
+/* The ad-break log: top left, under any problems, and not hidden with the bar. */
 .player #cues {
-  position: fixed; left: 12px; bottom: 68px; z-index: 2; width: min(520px, calc(100vw - 24px)); box-sizing: border-box;
-  padding: 4px 4px 6px 8px; border-radius: 6px; background: rgba(0, 0, 0, 0.75); font-size: 12px;
+  pointer-events: auto; width: min(560px, calc(100vw - 88px)); box-sizing: border-box;
+  padding: 4px 4px 6px 8px; border-radius: 6px; background: rgba(0, 0, 0, 0.8); font-size: 12px;
 }
-.player #cues .head { margin: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 600; }
+.player #cues[hidden] { display: none; }
+.player #cues .head { margin: 0; display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.player #cues .head > span:first-child { flex: 1; }
+.player #cues .state { padding: 1px 8px; border-radius: 10px; font-size: 12px; background: #3a3f47; color: #fff; white-space: nowrap; }
+.player #cues .state.game { background: #1f7a3a; }
+.player #cues .state.commercial { background: #b3261e; }
+.player #cues li.commercial, .player #cues li.game { padding: 4px 6px; border-radius: 4px; margin: 2px 0; }
+.player #cues li.commercial { background: rgba(179, 38, 30, 0.45); }
+.player #cues li.game { background: rgba(31, 122, 58, 0.45); }
+.player #cues .headline { font-weight: 700; font-size: 14px; color: #fff; }
+.player #cues .why { display: block; margin-top: 2px; color: #d6d9de; }
 .player #cues .dismiss {
   flex: none; width: 20px; height: 20px; padding: 0; line-height: 1; font-size: 15px;
   background: none; border-color: transparent; color: var(--muted);

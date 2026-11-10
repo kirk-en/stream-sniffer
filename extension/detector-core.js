@@ -25,8 +25,13 @@
   const PRESENT_T = 0.35; // match score at or above: the overlay is on screen
   const ABSENT_T = 0.2; // below: it's gone (in between: as it was)
   const FORGET_AFTER_S = 15 * 60; // an overlay gone this long is forgotten (new channel, say)
-  const WATERMARK_AFTER_S = 120; // judged after the scorebug has been gone this long in all
-  const WATERMARK_RATIO = 0.95; // a logo still there this much of that time is a site's watermark
+  // A site's watermark: a logo that stays through breaks. Judged on stretches without the
+  // scorebug that are break-length (a replay is shorter; halftime, with the network's logo up
+  // in the studio, is longer): a logo there 90% of each of WATERMARK_BREAKS of them, and gone
+  // through none, is the site's, not the network's.
+  const BREAK_MIN_S = 60;
+  const BREAK_MAX_S = 300;
+  const WATERMARK_BREAKS = 3;
 
   // Where overlays are looked for: the top and bottom bands, and the four corners.
   const zone = new Uint8Array(N);
@@ -87,7 +92,8 @@
       this.grown = new Uint8Array(N);
       this.label = new Int32Array(N);
       this.queue = new Int32Array(N);
-      this.options = { missingS: 4, returnS: 2, ...options };
+      // needBoth: a break only once both a scorebug and a network logo are learned, and both gone.
+      this.options = { missingS: 4, returnS: 2, needBoth: true, ...options };
       this.reset();
     }
 
@@ -109,7 +115,7 @@
       this.breakStart = 0;
       this.blacks = []; // times of black frames
       this.cuts = []; // times of scene cuts
-      this.bugGoneTotal = 0; // time the scorebug was gone (for spotting watermarks)
+      this.bugGone = null; // the current stretch without the scorebug: { length, logos: Map(logo -> time present) }
     }
 
     // One frame: rgba is W x H x 4 bytes; dt is the seconds of video since the last frame.
@@ -188,6 +194,7 @@
           watermark: o.watermark,
         })),
         learning: this.candidates.map((c) => ({ kind: c.kind, sightings: c.sightings })),
+        waitingFor: this.waitingFor ?? '',
       };
     }
 
@@ -295,7 +302,8 @@
         goneFor: 0,
         backFor: 0,
         watermark: false,
-        presentWhileBugGone: 0,
+        stayedThrough: 0, // break-length stretches without the scorebug this logo stayed through
+        leftDuring: 0, // and ones it went during
       };
       if (o.kind === 'scorebug') {
         // One scorebug: a bigger one replaces a smaller (a ticker below it, say, is ignored).
@@ -399,32 +407,59 @@
       }
     }
 
-    // A logo that stays while the scorebug is gone, through every break, is the site's own mark,
-    // not the network's: it would keep a break from ever being called.
+    // Spots a site's watermark (see BREAK_MIN_S): it would otherwise keep a break from ever
+    // being called.
     spotWatermarks(dt, events) {
       const bug = this.overlays.find((o) => o.kind === 'scorebug');
-      if (!bug || bug.present) return;
-      this.bugGoneTotal += dt;
+      if (!bug) return;
+      // Gone until it's been back 3 s: a moment's flicker doesn't end the stretch.
+      if (!bug.present || bug.backFor < 3) {
+        this.bugGone ??= { length: 0, logos: new Map() };
+        this.bugGone.length += dt;
+        for (const o of this.overlays) {
+          if (o.kind === 'logo' && o.present) this.bugGone.logos.set(o, (this.bugGone.logos.get(o) ?? 0) + dt);
+        }
+        return;
+      }
+      const gone = this.bugGone;
+      this.bugGone = null;
+      if (!gone || gone.length < BREAK_MIN_S || gone.length > BREAK_MAX_S) return;
       for (const o of this.overlays) {
         if (o.kind !== 'logo' || o.watermark) continue;
-        if (o.present) o.presentWhileBugGone += dt;
-        if (this.bugGoneTotal >= WATERMARK_AFTER_S && o.presentWhileBugGone / this.bugGoneTotal >= WATERMARK_RATIO) {
+        if ((gone.logos.get(o) ?? 0) >= gone.length * 0.9) o.stayedThrough++;
+        else o.leftDuring++;
+        if (o.stayedThrough >= WATERMARK_BREAKS && !o.leftDuring) {
           o.watermark = true;
-          events.push(`ignoring the ${this.describe(o)}: it stayed for ${fmt(o.presentWhileBugGone)} of the ${fmt(this.bugGoneTotal)} the scorebug was gone, so it's likely the site's watermark`);
+          events.push(`ignoring the ${this.describe(o)}: it stayed on screen through ${o.stayedThrough} breaks without the scorebug, so it's likely the site's watermark, not the network's logo`);
         }
       }
     }
 
-    // is_commercial: every overlay gone for missingS starts a break; any back for returnS ends it.
+    // What a break needs and doesn't have yet, or '' when breaks can be called.
+    missing(watched) {
+      const bug = watched.some((o) => o.kind === 'scorebug');
+      const logo = watched.some((o) => o.kind === 'logo');
+      if (this.options.needBoth) {
+        if (!bug && !logo) return 'the scorebug and the network logo';
+        if (!bug) return 'the scorebug';
+        if (!logo) return 'the network logo';
+        return '';
+      }
+      return bug || logo ? '' : 'the scorebug or the network logo';
+    }
+
+    // is_commercial: everything watched (the scorebug and the network logo) gone for missingS
+    // starts a break; any of them back for returnS ends it.
     decide(dt) {
       const watched = this.overlays.filter((o) => !o.watermark);
-      if (!watched.length) {
-        if (this.state !== 'learning') {
-          const was = this.state;
-          this.state = 'learning';
-          return { to: 'learning', from: was, reasons: ['no overlays left to watch'] };
-        }
-        return null;
+      const missing = this.missing(watched);
+      this.waitingFor = missing;
+      if (missing) {
+        this.goneFor = 0;
+        if (this.state === 'learning') return null;
+        const was = this.state;
+        this.state = 'learning';
+        return { to: 'learning', from: was, reasons: [`no longer watching ${missing}`] };
       }
       if (this.state === 'learning') {
         this.state = 'game';
@@ -433,12 +468,12 @@
       const allGone = watched.every((o) => !o.present);
       const back = watched.filter((o) => o.present && o.backFor >= this.options.returnS);
       if (this.state === 'game') {
+        // Every one of them gone, each for the whole time: one still on screen resets the count.
         this.goneFor = allGone ? this.goneFor + dt : 0;
         if (this.goneFor < this.options.missingS) return null;
         this.state = 'commercial';
         this.breakStart = this.t - this.goneFor;
         const reasons = watched.map((o) => `${this.describe(o)} gone for ${fmt(o.goneFor)} (match ${o.score.toFixed(2)})`);
-        if (!watched.some((o) => o.kind === 'scorebug')) reasons.push('no scorebug learned, so going by the logo alone');
         const black = this.blacks.filter((t) => t >= this.t - this.goneFor - 10).length;
         if (black) reasons.push(`${black} black frame${black > 1 ? 's' : ''} around the change`);
         const cuts = this.cuts.filter((t) => t >= this.t - 30).length;

@@ -93,14 +93,23 @@ async function main() {
     assert(during.boxes.some((b) => /^present: logo/.test(b)), 'a green box on the logo');
 
     await at(BREAK_END - 2);
+    const badge = () => page.evaluate(() => document.getElementById('detect-state').textContent);
+    const breakBadge = await badge();
+    assert(/📺 COMMERCIAL/.test(breakBadge), `in the break, the log's badge says so ("${breakBadge}")`);
+    const where = await page.evaluate(() => document.getElementById('cues').getBoundingClientRect().toJSON());
+    assert(where.top < 100 && where.left < 100, `the ad-break log is at the top left (${Math.round(where.left)}, ${Math.round(where.top)})`);
     const inBreak = await page.evaluate(() => [...document.querySelectorAll('#overlay-boxes div')].map((d) => d.className));
     assert(inBreak.length && inBreak.every((c) => c.split(' ').includes('gone')), `in the break, the boxes say gone (${inBreak.join(', ')})`);
 
     await at(BREAK_END + 6);
     const log = await page.evaluate(() => [...document.querySelectorAll('#cue-list li')].map((li) => li.textContent).reverse());
     for (const l of log) console.log(`     log: ${l}`);
-    const start = log.find((l) => /is_commercial = true/.test(l));
-    const end = log.find((l) => /is_commercial = false/.test(l));
+    const start = log.find((l) => /📺 COMMERCIAL: is_commercial = true/.test(l));
+    const end = log.find((l) => /🏈 GAME BACK: is_commercial = false/.test(l));
+    const afterBadge = await badge();
+    assert(/🏈 GAME/.test(afterBadge), `after it, the badge says the game ("${afterBadge}")`);
+    const highlighted = await page.evaluate(() => [...document.querySelectorAll('#cue-list li.commercial, #cue-list li.game')].length);
+    assert(highlighted === 2, `the two changes are highlighted lines (${highlighted})`);
     assert(!!start && /scorebug .* gone/.test(start) && /logo .* gone/.test(start), 'the break is logged, with the scorebug and logo gone as why');
     assert(!!end && /back for/.test(end) && /the break lasted/.test(end), 'the return is logged, with what came back and how long the break was');
     const quality = await page.evaluate(() => {
