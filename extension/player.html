@@ -35,6 +35,11 @@
 
   <!-- Errors and buffering, over the video, only while something is wrong. -->
   <div id="problems"></div>
+  <!-- Ad-break cues as they're found, while their logging is on. Stays up until closed. -->
+  <div id="cues" hidden>
+    <p class="head"><span>Ad-break cues <span id="cue-count"></span></span><button id="cues-close" type="button" class="dismiss" aria-label="Close" title="Close (the cues stay in Copy log)">×</button></p>
+    <ol id="cue-list"></ol>
+  </div>
 
   <button id="settings" type="button" aria-label="Settings" aria-expanded="false" title="Settings">⚙</button>
   <div id="menu" hidden>

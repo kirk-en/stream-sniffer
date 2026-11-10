@@ -1018,6 +1018,38 @@ const CUE_TAG = /CUE|SCTE|SPLICE|OATCLS|^EXT-X-DATERANGE$|^EXT-X-ASSET|^EXT-X-AD
 // #EXT-X-SCTE35's CUE, #EXT-X-CUE-OUT-CONT's SCTE35.
 const CUE_ATTR = /(?:^|,)\s*(SCTE35(?:-OUT|-IN|-CMD)?|CUE)=("?)([^",]+)\2/g;
 
+// The cue box over the video: every cue found, newest first, until it's closed. Closing empties
+// it; the next cue opens it again. Only touched when a cue comes in, so it costs nothing between.
+const cueBox = document.getElementById('cues');
+const cueList = document.getElementById('cue-list');
+const cueCount = document.getElementById('cue-count');
+const CUE_BOX_MAX = 50; // shown; all of them are in the log
+document.getElementById('cues-close').addEventListener('click', () => {
+  cueBox.hidden = true;
+  cueList.replaceChildren();
+});
+// Logs a cue and shows it. kind: 'break' (an ad break starts or ends), 'note' (what a stream
+// carries), or '' (any other cue).
+function cueEvent(s, text, kind = '') {
+  logEvent(s, text);
+  const li = document.createElement('li');
+  const when = document.createElement('span');
+  when.className = 'when';
+  const place = streams.indexOf(s) === 0 ? '' : ' small';
+  when.textContent = `${new Date().toLocaleTimeString(undefined, { hour12: false })}${place}`;
+  const what = document.createElement('span');
+  if (kind) what.className = kind;
+  what.textContent = text.length > 220 ? `${text.slice(0, 220)}…` : text;
+  what.title = text;
+  li.append(when, what);
+  cueList.prepend(li);
+  while (cueList.children.length > CUE_BOX_MAX) cueList.lastChild.remove();
+  const n = cueList.querySelectorAll('li > span:not(.when):not(.note)').length;
+  cueCount.textContent = n ? `(${n})` : '';
+  cueBox.hidden = false;
+}
+const breakKind = (text) => (/AD BREAK|#EXT-X-CUE-(OUT|IN)\b/.test(text) ? 'break' : '');
+
 function seenCue(s, key) {
   if (s.cuesSeen.has(key)) return true;
   if (s.cuesSeen.size > 5000) s.cuesSeen.clear(); // a long game: old ones won't come back
@@ -1034,7 +1066,7 @@ function logPlaylistCues(s, details) {
   for (const frag of details.fragments) {
     for (const [name, value = ''] of frag.tagList ?? []) {
       if (name === 'DIS') {
-        if (!seenCue(s, `dis:${frag.sn}`)) logEvent(s, `cue (playlist): discontinuity ${cueWhere(frag)}; often where an ad is stitched in or out`);
+        if (!seenCue(s, `dis:${frag.sn}`)) cueEvent(s, `cue (playlist): discontinuity ${cueWhere(frag)}; often where an ad is stitched in or out`);
         continue;
       }
       if (!CUE_TAG.test(name) || seenCue(s, `${frag.sn}:${name}:${value}`)) continue;
@@ -1054,7 +1086,8 @@ function logPlaylistCues(s, details) {
         if (cue) decoded.push(Scte35.describe(cue));
       }
       const shown = value.length > 300 ? `${value.slice(0, 300)}…` : value;
-      logEvent(s, `cue (playlist): #${name}${shown ? `:${shown}` : ''} ${cueWhere(frag)}${decoded.map((d) => ` => ${d}`).join('')}`);
+      const text = `cue (playlist): #${name}${shown ? `:${shown}` : ''} ${cueWhere(frag)}${decoded.map((d) => ` => ${d}`).join('')}`;
+      cueEvent(s, text, breakKind(text));
     }
   }
 }
@@ -1068,7 +1101,7 @@ function logSegmentCues(s, frag, payload) {
     if (!s.cueTrackNoted) {
       s.cueTrackNoted = true;
       const why = frag.decryptdata?.method && frag.decryptdata.method !== 'NONE' ? 'encrypted' : 'not MPEG-TS (likely fMP4)';
-      logEvent(s, `cue (video): segments are ${why}, so cues inside the video aren't read; playlist cues still are`);
+      cueEvent(s, `cue (video): segments are ${why}, so cues inside the video aren't read; playlist cues still are`, 'note');
     }
     return;
   }
@@ -1081,15 +1114,16 @@ function logSegmentCues(s, frag, payload) {
   }
   if (!s.cueTrackNoted) {
     s.cueTrackNoted = true;
-    logEvent(s, found.pid == null
+    cueEvent(s, found.pid == null
       ? 'cue (video): segments have no SCTE-35 track'
-      : `cue (video): segments carry a SCTE-35 track (pid 0x${found.pid.toString(16)}); its cues will be logged`);
+      : `cue (video): segments carry a SCTE-35 track (pid 0x${found.pid.toString(16)}); its cues will be logged`, 'note');
   }
   for (const section of found.sections) {
     const cue = Scte35.parseSection(section);
     // Encoders repeat a cue over several segments; once is enough.
     if (seenCue(s, cue.hex)) continue;
-    logEvent(s, `cue (video): ${Scte35.describe(cue)} (in segment ${frag.sn})`);
+    const text = `cue (video): ${Scte35.describe(cue)} (in segment ${frag.sn})`;
+    cueEvent(s, text, breakKind(text));
   }
 }
 

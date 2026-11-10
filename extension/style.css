@@ -119,6 +119,22 @@ body.player { background: #000; overflow: hidden; }
 .player #problems .dismiss:hover { color: var(--text); border-color: var(--border); }
 .player .warn { color: var(--warn, #f0b429); }
 .player #problems .ok { color: #5bd27a; }
+/* Ad-break cues: bottom left, above the bar, and not hidden with it. */
+.player #cues {
+  position: fixed; left: 12px; bottom: 68px; z-index: 2; width: min(520px, calc(100vw - 24px)); box-sizing: border-box;
+  padding: 4px 4px 6px 8px; border-radius: 6px; background: rgba(0, 0, 0, 0.75); font-size: 12px;
+}
+.player #cues .head { margin: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 600; }
+.player #cues .dismiss {
+  flex: none; width: 20px; height: 20px; padding: 0; line-height: 1; font-size: 15px;
+  background: none; border-color: transparent; color: var(--muted);
+}
+.player #cues .dismiss:hover { color: var(--text); border-color: var(--border); }
+.player #cues ol { margin: 4px 0 0; padding: 0; list-style: none; display: grid; gap: 2px; max-height: 40vh; overflow: auto; }
+.player #cues li { overflow-wrap: anywhere; }
+.player #cues .when { color: var(--muted); margin-right: 6px; font-variant-numeric: tabular-nums; }
+.player #cues .break { color: var(--warn, #f0b429); font-weight: 600; }
+.player #cues .note { color: var(--muted); }
 .player #settings {
   position: fixed; top: 12px; right: 12px; z-index: 3; width: 36px; height: 36px; padding: 0; font-size: 18px;
   background: rgba(30, 33, 40, 0.6); opacity: 0.6;
