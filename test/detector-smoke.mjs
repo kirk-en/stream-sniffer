@@ -95,7 +95,16 @@ async function main() {
     assert(idle.overlays === 0, `before it's pressed, nothing is learned (${idle.overlays} boxes at 8 s)`);
     await page.click('#learn-btn');
     await page.waitForFunction(() => /Learning…/.test(document.getElementById('learn-btn').textContent), { timeout: 5000 });
-    console.log('     pressed Learn at 8 s');
+    const counting = await page.evaluate(() => ({ text: document.getElementById('learn-btn').textContent, tip: document.getElementById('learn-btn').title }));
+    assert(/click to cancel/.test(counting.text) && /cancel/.test(counting.tip), `the countdown says it can be clicked to cancel ("${counting.text}")`);
+    // A commercial came on, say: cancel.
+    await page.click('#learn-btn');
+    await page.waitForFunction(() => /Learn scorebug/.test(document.getElementById('learn-btn').textContent), { timeout: 5000 });
+    await page.waitForFunction(() => /🛑 detector: learning cancelled/.test(document.getElementById('cue-list').textContent), { timeout: 5000 });
+    assert(true, 'clicking the countdown cancels learning, and the log says so');
+    await page.click('#learn-btn');
+    await page.waitForFunction(() => /Learning…/.test(document.getElementById('learn-btn').textContent), { timeout: 5000 });
+    console.log('     pressed Learn at 8 s, cancelled it, pressed it again');
     await at(GAME_END - 3);
     const during = await page.evaluate(() => ({
       boxes: [...document.querySelectorAll('#overlay-boxes div')].map((d) => `${d.classList.contains('gone') ? 'gone' : d.classList.contains('watermark') ? 'watermark' : 'present'}: ${d.textContent}`),

@@ -1049,8 +1049,11 @@ function detectResult(r) {
     const was = r.change.from === 'commercial' ? ' (it was in a break)' : '';
     cueEvent(s, `⚠️ DETECTION UNRELIABLE: is_commercial paused${was}. Why: ${r.change.reasons.join('; ')}. Press Relearn during normal play, with the scorebug and the network logo on screen.`, 'unsure');
   }
+  // A cancelled learning: the viewer's own click, so always answered.
+  for (const e of r.events) if (s && /^learning cancelled/.test(e)) cueEvent(s, `🛑 detector: ${e}`, 'note');
   if (detect.log && s) {
     for (const e of r.events) {
+      if (/^learning cancelled/.test(e)) continue;
       const emoji = /^learned/.test(e)
         ? '🧠'
         : /^learning ended without/.test(e)
@@ -1103,10 +1106,10 @@ function renderLearnBtn() {
   const learning = r?.learnLeft > 0;
   const ready = r && (r.state === 'game' || r.state === 'commercial');
   const unsure = r?.state === 'unsure';
-  learnBtn.disabled = learning;
+  learnBtn.title = learning ? 'Click to cancel, if a commercial (or a replay, or halftime) came on: what it found so far is dropped' : learnBtn.dataset.tip;
   learnBtn.className = `learn${learning ? ' busy' : unsure ? ' warn' : ready ? ' done' : ''}`;
   learnBtn.textContent = learning
-    ? `🧠 Learning… ${Math.ceil(r.learnLeft)} s`
+    ? `🧠 Learning… ${Math.ceil(r.learnLeft)} s · click to cancel`
     : unsure
       ? '⚠️ Relearn during normal play'
       : ready
@@ -1120,7 +1123,13 @@ function learnNow() {
   if (detect.log && big()) cueEvent(big(), `🧠 ${msg}`, 'note');
   else logEvent(big() ?? null, msg);
 }
-learnBtn.addEventListener('click', learnNow);
+function cancelLearn() {
+  detector.cancelLearn(); // its result says so in the log
+  // Shown at once; the worker's next result says what it went back to.
+  if (detectLast) detectLast = { ...detectLast, learnLeft: 0 };
+  renderDetect();
+}
+learnBtn.addEventListener('click', () => (detectLast?.learnLeft > 0 ? cancelLearn() : learnNow()));
 
 // Boxes over the video, where the picture's content is (object-fit: contain leaves bars).
 function drawOverlayBoxes() {

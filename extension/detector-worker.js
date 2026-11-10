@@ -11,6 +11,7 @@ const ctx = canvas.getContext('2d', { willReadFrequently: true });
 onmessage = ({ data }) => {
   if (data.type === 'reset') return analyzer.reset();
   if (data.type === 'learn') return analyzer.relearn();
+  if (data.type === 'cancel') return analyzer.cancelLearning();
   if (data.type === 'options') return analyzer.setOptions(data.options);
   if (data.type !== 'frame') return;
   const started = performance.now();

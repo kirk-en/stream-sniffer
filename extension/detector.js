@@ -77,6 +77,10 @@
       relearn() {
         worker.postMessage({ type: 'learn' });
       },
+      // Stops learning and drops what it found (a commercial came on).
+      cancelLearn() {
+        worker.postMessage({ type: 'cancel' });
+      },
       setOptions(options) {
         worker.postMessage({ type: 'options', options });
       },

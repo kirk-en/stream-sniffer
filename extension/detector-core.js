@@ -125,6 +125,8 @@
       this.learnUntil = 0; // new overlays are learned only until this time (see relearn)
       this.learnEndNoted = true;
       this.watermarks = []; // boxes of logos found to be a site's watermark, kept across relearning
+      this.before = null; // what was learned before the current learning (see cancelLearning)
+      this.pendingEvents = []; // said with the next frame's result
       this.clearHealth();
     }
 
@@ -133,6 +135,8 @@
     // running average of edges keeps going all along, so overlays that were already steady are
     // found within seconds. Watermarks already found stay ignored.
     relearn() {
+      // What was learned before, for cancelLearning. A second Learn mid-learning keeps the first's.
+      if (this.t >= this.learnUntil) this.before = { overlays: this.overlays, unreliable: this.unreliable, checkUntil: this.checkUntil };
       this.overlays = [];
       this.candidates = [];
       this.state = 'learning';
@@ -141,6 +145,31 @@
       this.learnUntil = this.t + LEARN_S;
       this.learnEndNoted = false;
       this.clearHealth();
+    }
+
+    // Stops learning early and drops what it found: the viewer saw the game wasn't on (a
+    // commercial came) after pressing Learn. Goes back to what was learned before, if anything.
+    cancelLearning() {
+      if (this.t >= this.learnUntil) return;
+      const before = this.before ?? { overlays: [], unreliable: '', checkUntil: null };
+      this.before = null;
+      this.learnUntil = this.t;
+      this.learnEndNoted = true;
+      this.candidates = [];
+      this.overlays = before.overlays;
+      this.goneFor = 0;
+      this.bugGone = null;
+      this.clearHealth();
+      this.unreliable = before.unreliable;
+      this.checkUntil = before.checkUntil;
+      this.state = 'learning'; // the next frame moves on from here, as after learning
+      this.skipCheck = true; // they were checked when learned; now (in a break) they'd look weak
+      for (const o of this.overlays) o.flips = [];
+      this.pendingEvents.push(
+        this.overlays.length
+          ? `learning cancelled: back to the ${this.overlays.filter((o) => !o.watermark).map((o) => this.describe(o)).join(' and the ')} learned before`
+          : 'learning cancelled: nothing kept. Press Learn when normal play is back',
+      );
     }
 
     clearHealth() {
@@ -231,7 +260,7 @@
         }
       }
 
-      const events = [];
+      const events = this.pendingEvents.splice(0);
       if (this.t - this.lastDiscover >= DISCOVER_EVERY_S) {
         this.lastDiscover = this.t;
         this.discover(events);
@@ -551,7 +580,8 @@
       }
       if (this.state === 'learning') {
         this.state = 'game';
-        this.checkUntil = this.t + CHECK_S;
+        if (!this.skipCheck) this.checkUntil = this.t + CHECK_S;
+        this.skipCheck = false;
         this.checkScores = new Map();
         return { to: 'game', from: 'learning', reasons: [`watching the ${watched.map((o) => this.describe(o)).join(' and the ')}`] };
       }

@@ -191,6 +191,34 @@ const changes = (out) => out.filter((x) => typeof x === 'object');
   assert(out.some((x) => typeof x === 'string' && /learning done/.test(x)) && out.last.learnLeft === 0, 'and says when learning is done');
 }
 
+// 5b. Learn pressed, then a commercial starts: cancelling drops what it found.
+{
+  // Nothing learned before: back to nothing.
+  const a = new Analyzer();
+  const out = run(a, 20, {});
+  a.relearn();
+  run(a, 3, {}, out);
+  run(a, 5, { bug: false, logo: false }, out); // the commercial
+  a.cancelLearning();
+  run(a, 1, { bug: false, logo: false }, out);
+  const said = out.find((x) => typeof x === 'string' && /learning cancelled: nothing kept/.test(x));
+  assert(!!said && out.last.learnLeft === 0, `cancel stops learning and says so: ${said}`);
+  run(a, 60, {}, out);
+  assert(out.last.overlays.length === 0 && out.last.state === 'learning', `and nothing more is learned until Learn again (${out.last.overlays.length})`);
+
+  // Learned well before: back to that, and the commercial is called with it.
+  const b = learner();
+  const out2 = run(b, 60, {});
+  b.relearn(); // pressed again...
+  run(b, 2, {}, out2);
+  run(b, 2, { bug: false, logo: false }, out2); // ...and a commercial starts
+  b.cancelLearning();
+  run(b, 10, { bug: false, logo: false }, out2);
+  const back = out2.find((x) => typeof x === 'string' && /learning cancelled: back to the/.test(x));
+  assert(!!back, `cancel goes back to what was learned before: ${back}`);
+  assert(changes(out2).some((c) => c.to === 'commercial') && !changes(out2).some((c) => c.to === 'unsure'), `that commercial is then called, with no "unreliable" (${changes(out2).map((c) => c.to).join(' -> ')})`);
+}
+
 // 6. Shaky detection: flagged, and no more breaks until relearned.
 {
   // An overlay that keeps flickering.

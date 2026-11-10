@@ -142,7 +142,8 @@ body.player { background: #000; overflow: hidden; }
   background: #2d5bd7; color: #fff; cursor: pointer;
 }
 .player #learn-btn[hidden] { display: none; }
-.player #learn-btn.busy { background: #3a3f47; cursor: default; }
+.player #learn-btn.busy { background: #3a3f47; }
+.player #learn-btn.busy:hover { background: #55505a; }
 .player #learn-btn.warn { background: #c76a00; }
 .player #learn-btn.done { background: rgba(0, 0, 0, 0.6); font-weight: 400; font-size: 12px; padding: 3px 10px; }
 /* The ad-break log: top left, under any problems, and not hidden with the bar. */
