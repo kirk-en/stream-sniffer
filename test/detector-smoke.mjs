@@ -2,7 +2,7 @@
 // that vanish for a "commercial", plays it in Chrome with the extension, and checks that the
 // break and the return are logged, with why. Also reports what the detector costs per look.
 //   cd test && node detector-smoke.mjs        (HEADFUL=1 to watch it)
-// Needs ffmpeg and the installed Chrome. Takes about 85 s: the video plays in real time.
+// Needs ffmpeg and the installed Chrome. Takes about 100 s: the video plays in real time.
 import puppeteer from 'puppeteer-core';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -13,9 +13,11 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const extDir = path.resolve(here, '../extension');
 const dir = path.join(here, 'fixtures/detector');
-const GAME_END = 45; // the overlays go at 45 s...
-const BREAK_END = 60; // ...and come back at 60 s
-const LENGTH = 70;
+// The overlays go for a replay (the field stays), then for an ad (no field), then come back.
+const REPLAY = [50, 60];
+const GAME_END = 66; // the ad starts...
+const BREAK_END = 81; // ...and ends
+const LENGTH = 92;
 
 let failed = 0;
 function assert(ok, what) {
@@ -23,16 +25,19 @@ function assert(ok, what) {
   if (!ok) failed++;
 }
 
-// A moving picture (testsrc2, scrolling) with a scorebug (a dark bar of light "text" blocks,
-// bottom middle) and a logo (top right), both gone between GAME_END and BREAK_END.
+// A moving picture (testsrc2, scrolling, tinted green like a field) with a scorebug (a dark bar
+// of light "text" blocks, bottom middle) and a logo (top right). Both go in the replay, which
+// keeps the field, and in the ad, which is tinted red.
 function makeVideo() {
   const stamp = path.join(dir, 'made-with.json');
-  const madeWith = JSON.stringify({ GAME_END, BREAK_END, LENGTH, v: 1 });
+  const madeWith = JSON.stringify({ REPLAY, GAME_END, BREAK_END, LENGTH, v: 2 });
   if (fs.existsSync(stamp) && fs.readFileSync(stamp, 'utf8') === madeWith) return;
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
-  const on = `enable='not(between(t,${GAME_END},${BREAK_END}))'`;
+  const on = `enable='not(between(t,${REPLAY[0]},${REPLAY[1]})+between(t,${GAME_END},${BREAK_END}))'`;
   const boxes = [
+    'hue=s=0,colorchannelmixer=rr=0.35:gg=0.9:bb=0.3', // the field's green
+    `drawbox=x=0:y=0:w=iw:h=ih:color=0xd03020@0.75:t=fill:enable='between(t,${GAME_END},${BREAK_END})'`, // the ad
     `drawbox=x=300:y=610:w=680:h=64:color=black@0.85:t=fill:${on}`,
     ...[0, 1, 2, 3, 4, 5, 6, 7].map((i) => `drawbox=x=${320 + i * 80}:y=628:w=56:h=28:color=white:t=fill:${on}`),
     `drawbox=x=1110:y=40:w=120:h=70:color=white@0.9:t=6:${on}`,
@@ -115,6 +120,12 @@ async function main() {
     assert(during.boxes.some((b) => /^present: scorebug/.test(b)), 'a green box on the scorebug');
     assert(during.boxes.some((b) => /^present: logo/.test(b)), 'a green box on the logo');
 
+    // The replay: both overlays gone, the field still there. Not a break.
+    await at(REPLAY[1] - 1);
+    const inReplay = await page.evaluate(() => ({ badge: document.getElementById('detect-state').textContent, log: document.getElementById('cue-list').textContent }));
+    assert(/🏈 GAME/.test(inReplay.badge) && /🌱.*likely a replay/.test(inReplay.log), `in the replay (overlays gone, field on screen) it stays the game, and says why ("${inReplay.badge}")`);
+    assert(/🌱 detector: field check on/.test(inReplay.log), "it learned the field's green while learning");
+
     await at(BREAK_END - 2);
     const badge = () => page.evaluate(() => document.getElementById('detect-state').textContent);
     const breakBadge = await badge();
@@ -136,6 +147,7 @@ async function main() {
     const highlighted = await page.evaluate(() => [...document.querySelectorAll('#cue-list li.commercial, #cue-list li.game')].length);
     assert(highlighted === 2, `the two changes are highlighted lines (${highlighted})`);
     assert(!!start && /scorebug .* gone/.test(start) && /logo .* gone/.test(start), 'the break is logged, with the scorebug and logo gone as why');
+    assert(!!start && /of the picture is field/.test(start), 'and with how little of the picture is field');
     assert(!!end && /back for/.test(end) && /the break lasted/.test(end), 'the return is logged, with what came back and how long the break was');
     const quality = await page.evaluate(() => {
       const q = document.querySelector('video.big').getVideoPlaybackQuality();

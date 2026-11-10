@@ -17,6 +17,7 @@ function learner(options) {
 }
 
 let failed = 0;
+const pct = (n) => `${Math.round(n * 100)}%`;
 function assert(ok, what) {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${what}`);
   if (!ok) failed++;
@@ -28,7 +29,7 @@ const rand = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffff
 
 // The game: blocks of random gray, new and moved every frame (busier than any real
 // picture, which also moves: a grid in the same place every frame would be a steady overlay).
-function background(px, calm) {
+function background(px, calm, look) {
   // Blocks of a size that changes each frame: a fixed grid could line up with a graphic's
   // evenly spaced letters, which real pictures don't do frame after frame.
   const size = 5 + Math.floor(rand() * 7);
@@ -38,7 +39,10 @@ function background(px, calm) {
     for (let bx = -ox; bx < W; bx += size) {
       // About as busy as a crowd shot; calm: a field, under a gentle camera.
       const v = calm ? Math.floor(rand() * 24) + 90 : Math.floor(rand() * 110) + 60;
-      for (let y = Math.max(0, by); y < Math.min(H, by + size); y++) for (let x = Math.max(0, bx); x < Math.min(W, bx + size); x++) px(x, y, v);
+      // pitch: shades of grass; ad: anything but green.
+      const ADS = [[200, 40, 40], [40, 60, 200], [220, 200, 40], [160, 40, 160], [230, 230, 230]];
+      const rgb = look === 'pitch' ? [v * 0.45, v + 30, v * 0.35] : look === 'ad' ? ADS[Math.floor(rand() * ADS.length)].map((c) => c * (0.6 + rand() * 0.4)) : null;
+      for (let y = Math.max(0, by); y < Math.min(H, by + size); y++) for (let x = Math.max(0, bx); x < Math.min(W, bx + size); x++) px(x, y, v, rgb);
     }
   }
 }
@@ -51,18 +55,19 @@ function graphic(px, x0, y0, w, h) {
     }
   }
 }
-function frame({ bug = true, logo = true, watermark = false, team = false, calm = false, black = false } = {}) {
+function frame({ bug = true, logo = true, watermark = false, team = false, calm = false, look = null, black = false } = {}) {
   const rgba = new Uint8ClampedArray(W * H * 4);
-  const px = (x, y, v) => {
+  const px = (x, y, v, rgb) => {
     const j = (y * W + x) * 4;
-    rgba[j] = rgba[j + 1] = rgba[j + 2] = v;
+    if (rgb) [rgba[j], rgba[j + 1], rgba[j + 2]] = rgb.map((c) => Math.min(255, Math.max(0, c)));
+    else rgba[j] = rgba[j + 1] = rgba[j + 2] = v;
     rgba[j + 3] = 255;
   };
   if (black) {
     for (let j = 3; j < rgba.length; j += 4) rgba[j] = 255;
     return rgba;
   }
-  background(px, calm);
+  background(px, calm, look);
   if (bug) graphic(px, 80, 180, 220, 22); // bottom middle
   if (logo) graphic(px, 330, 12, 36, 20); // top right
   if (watermark) graphic(px, 10, 12, 30, 14); // top left, never goes
@@ -207,6 +212,36 @@ const changes = (out) => out.filter((x) => typeof x === 'object');
     const one = changes(out2).find((c) => c.to === 'game' && c.from === 'commercial');
     assert(!!one && new RegExp(`only the ${kind} .* back, but clearly`).test(one.reasons[0]), `only the ${kind} back, clearly, for 2 s: the game is back (${one?.reasons.join('; ')})`);
   }
+}
+
+// 4d. The field: with both overlays gone, a picture still full of this game's green is a replay.
+{
+  const a = learner();
+  const out = run(a, 45, { look: 'pitch' });
+  const on = out.find((x) => typeof x === 'string' && /field check on/.test(x));
+  assert(!!on && out.last.field?.baseline > 0.5, `learns the field's green while learning: ${on}`);
+  run(a, 30, { bug: false, logo: false, look: 'pitch' }, out); // a replay
+  assert(!changes(out).some((c) => c.to === 'commercial'), 'both gone 30 s over the field: not a break');
+  const replay = out.find((x) => typeof x === 'string' && /likely a replay/.test(x));
+  assert(!!replay, `and it says why: ${replay}`);
+  run(a, 5, { look: 'pitch' }, out);
+  run(a, 10, { bug: false, logo: false, look: 'ad' }, out); // an ad
+  const brk = changes(out).find((c) => c.to === 'commercial');
+  assert(!!brk && brk.reasons.some((x) => /only \d+% of the picture is field/.test(x)), `both gone over an ad: a break (${brk?.reasons.join('; ')})`);
+
+  // The share: high on this field, near nothing on an ad.
+  const b = learner();
+  run(b, 45, { look: 'pitch' });
+  const share = (look) => {
+    for (let i = 0; i < 6; i++) b.push(frame({ look }), 0.5);
+    return b.fieldShare;
+  };
+  assert(share('pitch') > 0.5 && share('ad') < 0.1, `field share: ${pct(share('pitch'))} on the pitch, ${pct(share('ad'))} on an ad`);
+
+  // Learned over no field at all: the check stays off and says so.
+  const c = learner();
+  const out3 = run(c, 45, {});
+  assert(out3.some((x) => typeof x === 'string' && /field check off/.test(x)) && !out3.last.field, 'learned over no field: the field check is off, and it says so');
 }
 
 // 5. Nothing is learned until Learn is pressed, and learning stops after 40 s.

@@ -29,6 +29,35 @@
   // returnS, or when one of them alone matches clearly, at least this well, for returnS. A weak
   // match on one alone (0.47, seen Nov 2026) is often some ad's graphic in that corner.
   const CLEAR_T = 0.6;
+  // The field: football is played on green, and a replay is too; an ad rarely is. Its shades are
+  // learned while learning (lighting and turf differ from game to game): the greenish pixels'
+  // hue, saturation and brightness, from the 5th to the 95th percentile, widened a little. Then
+  // with both overlays gone, a picture still FIELD_KEEP as much field as in play is a replay,
+  // not a break.
+  const FIELD_STEP = 3; // every 3rd pixel each way
+  const FIELD_KEEP = 0.4;
+  const FIELD_MIN = 0.12; // less field than this while learning: the check stays off
+  const H_BINS = 360; // hue, 1 degree each
+  const SV_BINS = 20; // saturation and brightness, 0.05 each
+  // Into a reused buffer: called for thousands of pixels a look.
+  const hsv = new Int32Array(3);
+  const toHsv = (r, g, b) => {
+    const mx = Math.max(r, g, b);
+    const d = mx - Math.min(r, g, b);
+    let h = 0;
+    if (d) {
+      if (mx === r) h = 60 * (((g - b) / d + 6) % 6);
+      else if (mx === g) h = 60 * ((b - r) / d + 2);
+      else h = 60 * ((r - g) / d + 4);
+    }
+    hsv[0] = Math.min(359, Math.floor(h));
+    hsv[1] = mx ? Math.min(SV_BINS - 1, Math.floor((d / mx) * SV_BINS)) : 0;
+    hsv[2] = Math.min(SV_BINS - 1, Math.floor((mx / 255) * SV_BINS));
+    return hsv;
+  };
+  // Generic green, for picking which pixels to learn the field's shades from.
+  const greenish = (h, s, v) => h >= 60 && h <= 170 && s >= 4 && v >= 3;
+  const pct = (n) => `${Math.round(n * 100)}%`;
   const BUG_GAP = 0.15; // a "logo" on the scorebug's row, this close (of the width), is part of it
   // When the detection is too shaky to trust (see health): it stops calling breaks until relearned.
   const CHECK_S = 10; // after learning, each overlay is watched this long...
@@ -138,6 +167,11 @@
       this.learnEndNoted = true;
       this.watermarks = []; // boxes of logos found to be a site's watermark, kept across relearning
       this.before = null; // what was learned before the current learning (see cancelLearning)
+      this.field = null; // the learned field: { h0, h1, s0, s1, v0, v1, baseline }, or null
+      this.fieldHist = null; // while learning: counts of every sampled pixel's hue x sat x bright
+      this.fieldShare = 0; // how much of the picture is field now (smoothed)
+      this.heldFor = 0; // both overlays gone, but the field on screen, for this long
+      this.heldNoted = false;
       this.pendingEvents = []; // said with the next frame's result
       this.clearHealth();
     }
@@ -148,7 +182,9 @@
     // found within seconds. Watermarks already found stay ignored.
     relearn() {
       // What was learned before, for cancelLearning. A second Learn mid-learning keeps the first's.
-      if (this.t >= this.learnUntil) this.before = { overlays: this.overlays, unreliable: this.unreliable, checkUntil: this.checkUntil };
+      if (this.t >= this.learnUntil) this.before = { overlays: this.overlays, unreliable: this.unreliable, checkUntil: this.checkUntil, field: this.field };
+      this.field = null;
+      this.fieldHist = { counts: new Float32Array(H_BINS * SV_BINS * SV_BINS), total: 0 };
       this.overlays = [];
       this.candidates = [];
       this.state = 'learning';
@@ -163,7 +199,9 @@
     // commercial came) after pressing Learn. Goes back to what was learned before, if anything.
     cancelLearning() {
       if (this.t >= this.learnUntil) return;
-      const before = this.before ?? { overlays: [], unreliable: '', checkUntil: null };
+      const before = this.before ?? { overlays: [], unreliable: '', checkUntil: null, field: null };
+      this.field = before.field;
+      this.fieldHist = null;
       this.before = null;
       this.learnUntil = this.t;
       this.learnEndNoted = true;
@@ -236,6 +274,7 @@
         if (v > 40) bright++;
       }
       const black = sum / N < 18 && bright < N * 0.02;
+      this.sampleField(rgba, dt);
       if (black) this.blacks.push(this.t);
       // A scene cut: the mix of dark and light changes at once. Comparing the mix, not the
       // pixels, means a camera pan (the same scene, moved) isn't taken for a cut.
@@ -280,9 +319,10 @@
       for (const o of this.overlays) this.check(o, dt);
       this.forget(events);
       this.spotWatermarks(dt, events);
-      const change = this.decide(dt);
+      const change = this.decide(dt, events);
       if (!this.learnEndNoted && this.t >= this.learnUntil) {
         this.learnEndNoted = true;
+        this.learnField(events);
         const missing = this.missing(this.overlays.filter((o) => !o.watermark));
         events.push(missing
           ? `learning ended without finding ${missing}. Press Learn again during normal play, with the scorebug and the network logo on screen`
@@ -308,6 +348,8 @@
         learning: this.candidates.map((c) => ({ kind: c.kind, sightings: c.sightings })),
         learnLeft: Math.max(0, this.learnUntil - this.t), // seconds of learning left
         unreliable: this.unreliable, // why it isn't trusted (state 'unsure'), or ''
+        // How much of the picture is field, against how much in play; null before it's learned.
+        field: this.field ? { share: this.fieldShare, baseline: this.field.baseline, on: this.fieldOn() } : null,
         waitingFor: this.waitingFor ?? '',
       };
     }
@@ -407,6 +449,82 @@
       }
       // Candidates not seen this time start over.
       this.candidates = this.candidates.filter((c) => c.seenAt === this.t);
+    }
+
+    // Counts the field's shades while learning; after, measures how much of the picture is field.
+    sampleField(rgba, dt) {
+      const learning = this.fieldHist && this.t < this.learnUntil;
+      const f = this.field;
+      if (!learning && !f) return;
+      let n = 0;
+      let inField = 0;
+      for (let y = 1; y < H; y += FIELD_STEP) {
+        for (let x = 1; x < W; x += FIELD_STEP) {
+          const j = (y * W + x) * 4;
+          toHsv(rgba[j], rgba[j + 1], rgba[j + 2]);
+          const h = hsv[0];
+          const s = hsv[1];
+          const v = hsv[2];
+          n++;
+          if (learning) this.fieldHist.counts[(h * SV_BINS + s) * SV_BINS + v]++;
+          if (f && h >= f.h0 && h <= f.h1 && s >= f.s0 && s <= f.s1 && v >= f.v0 && v <= f.v1) inField++;
+        }
+      }
+      if (learning) this.fieldHist.total += n;
+      if (f) this.fieldShare = this.fieldShare * 0.5 + (inField / n) * 0.5;
+    }
+
+    // At the end of learning: this game's field, from the shades counted.
+    learnField(events) {
+      const hist = this.fieldHist;
+      this.fieldHist = null;
+      if (!hist?.total) return;
+      const hue = new Float64Array(H_BINS);
+      const sat = new Float64Array(SV_BINS);
+      const val = new Float64Array(SV_BINS);
+      let green = 0;
+      for (let h = 0; h < H_BINS; h++) {
+        for (let s = 0; s < SV_BINS; s++) {
+          for (let v = 0; v < SV_BINS; v++) {
+            const c = hist.counts[(h * SV_BINS + s) * SV_BINS + v];
+            if (!c || !greenish(h, s, v)) continue;
+            hue[h] += c;
+            sat[s] += c;
+            val[v] += c;
+            green += c;
+          }
+        }
+      }
+      const at = (counts, p) => {
+        let acc = 0;
+        for (let i = 0; i < counts.length; i++) if ((acc += counts[i]) >= green * p) return i;
+        return counts.length - 1;
+      };
+      if (green / hist.total < FIELD_MIN) {
+        events.push(`field check off: only ${pct(green / hist.total)} of the picture was green while learning (an indoor shot, or close-ups?). Learn again over a wide shot of the field to use it`);
+        return;
+      }
+      const f = {
+        h0: Math.max(0, at(hue, 0.05) - 6),
+        h1: Math.min(H_BINS - 1, at(hue, 0.95) + 6),
+        s0: Math.max(0, at(sat, 0.05) - 1),
+        s1: Math.min(SV_BINS - 1, at(sat, 0.95) + 1),
+        v0: Math.max(0, at(val, 0.03) - 2),
+        v1: Math.min(SV_BINS - 1, at(val, 0.97) + 2),
+      };
+      // In play, this much of the picture is field: every pixel counted, inside those shades.
+      let inside = 0;
+      for (let h = f.h0; h <= f.h1; h++) {
+        for (let s = f.s0; s <= f.s1; s++) for (let v = f.v0; v <= f.v1; v++) inside += hist.counts[(h * SV_BINS + s) * SV_BINS + v];
+      }
+      f.baseline = inside / hist.total;
+      this.field = f;
+      this.fieldShare = f.baseline;
+      events.push(`field check on: this field's green (hue ${f.h0}-${f.h1}) is about ${pct(f.baseline)} of the picture in play`);
+    }
+
+    fieldOn() {
+      return !!this.field && this.fieldShare >= this.field.baseline * FIELD_KEEP;
     }
 
     // Whether a box touches a scorebug: learned, about to be, or found in this look.
@@ -585,7 +703,7 @@
 
     // is_commercial: everything watched (the scorebug and the network logo) gone for missingS
     // starts a break; any of them back for returnS ends it.
-    decide(dt) {
+    decide(dt, events = []) {
       const watched = this.overlays.filter((o) => !o.watermark);
       this.health(watched);
       if (this.unreliable) {
@@ -619,7 +737,20 @@
       const back = allBack ? watched : watched.filter((o) => o.present && o.clearFor >= returnS);
       if (this.state === 'game') {
         // Every one of them gone, each for the whole time: one still on screen resets the count.
-        this.goneFor = allGone ? this.goneFor + dt : 0;
+        // So does the field: with it still on screen, it's a replay (or a celebration, a stats
+        // graphic over the field), not a break.
+        const field = allGone && this.fieldOn();
+        if (field) {
+          this.heldFor += dt;
+          if (!this.heldNoted && this.heldFor >= this.options.missingS) {
+            this.heldNoted = true;
+            events.push(`both gone ${fmt(this.heldFor)}, but ${pct(this.fieldShare)} of the picture is field (in play about ${pct(this.field.baseline)}): likely a replay, so not a break`);
+          }
+        } else {
+          this.heldFor = 0;
+          this.heldNoted = false;
+        }
+        this.goneFor = allGone && !field ? this.goneFor + dt : 0;
         if (this.goneFor < this.options.missingS) return null;
         this.state = 'commercial';
         this.breakStart = this.t - this.goneFor;
@@ -628,6 +759,7 @@
         if (black) reasons.push(`${black} black frame${black > 1 ? 's' : ''} around the change`);
         const cuts = this.cuts.filter((t) => t >= this.t - 30).length;
         if (cuts >= 5) reasons.push(`${cuts} scene cuts in the last 30 s (ads cut fast)`);
+        if (this.field) reasons.push(`only ${pct(this.fieldShare)} of the picture is field (in play about ${pct(this.field.baseline)})`);
         return { to: 'commercial', from: 'game', reasons };
       }
       // In a break.

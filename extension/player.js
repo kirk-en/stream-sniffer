@@ -1056,6 +1056,10 @@ function detectResult(r) {
       if (/^learning cancelled/.test(e)) continue;
       const emoji = /^learned/.test(e)
         ? '🧠'
+        : /^field check on|likely a replay/.test(e)
+          ? '🌱'
+          : /^field check off/.test(e)
+            ? '⚠️'
         : /^learning ended without/.test(e)
           ? '⚠️'
           : /^learning done/.test(e)
@@ -1175,7 +1179,9 @@ function renderDetect() {
     r.state === 'unsure'
       ? `Not trusted, so no breaks are called: ${r.unreliable}. Press Relearn (top left) during normal play`
       : r.state !== 'learning'
-      ? `${r.state === 'commercial' ? 'Commercial break' : 'Game'}; watching ${watched.join(', ')}`
+      ? `${r.state === 'commercial' ? 'Commercial break' : 'Game'}; watching ${watched.join(', ')}${
+          r.field ? `; field ${Math.round(r.field.share * 100)}% of the picture (in play about ${Math.round(r.field.baseline * 100)}%${r.field.on ? '' : ', so not the game'})` : ''
+        }`
       : r.learnLeft > 0
         ? `Learning for ${Math.ceil(r.learnLeft)} s more: looking for overlays that stay put; still needs ${r.waitingFor}`
         : `Not watching yet: press Learn (top left) during normal play${r.overlays.length ? `; it still needs ${r.waitingFor}` : ''}`;
