@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node e2e.mjs"
+    "test": "node e2e.mjs",
+    "unit": "node scte35.test.mjs && node detector.test.mjs",
+    "smoke:detector": "node detector-smoke.mjs"
   },
   "devDependencies": {
     "puppeteer-core": "25.16.0",

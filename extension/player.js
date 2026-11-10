@@ -1011,6 +1011,146 @@ cueLogBox.addEventListener('change', () => {
   chrome.storage.local.set({ cueLog }).catch((err) => failPage(`Couldn't save whether ad-break cues are logged: ${err.message}`));
 });
 
+// Commercial detection from the picture (detector.js runs detector-core.js in a worker). Only
+// the big picture is watched. The menu's switches: watch at all, draw boxes over what it finds,
+// and log is_commercial changes with why. Off by default.
+const detectEls = {
+  on: document.getElementById('detect-on'),
+  draw: document.getElementById('detect-draw'),
+  log: document.getElementById('detect-log'),
+  missing: document.getElementById('detect-missing'),
+  status: document.getElementById('detect-status'),
+};
+const overlayBoxes = document.getElementById('overlay-boxes');
+let detect = { on: false, draw: false, log: false, missingS: 4 };
+let detectLast = null; // the latest result
+let detectError = '';
+const detectCost = []; // the last few samples' { grabMs, workMs }
+const detector = createDetector({
+  getVideo: () => (detect.on && big() && !big().casting ? big().video : null),
+  onResult: detectResult,
+  onError: (msg) => {
+    if (msg !== detectError) logEvent(big() ?? null, `detector: ${msg}`);
+    detectError = msg;
+    renderDetect();
+  },
+});
+
+function detectResult(r) {
+  detectError = '';
+  detectLast = r;
+  detectCost.push({ grabMs: r.grabMs, workMs: r.workMs });
+  if (detectCost.length > 20) detectCost.shift();
+  const s = big();
+  if (detect.log && s) {
+    for (const e of r.events) cueEvent(s, `detector: ${e}`, 'note');
+    const c = r.change;
+    if (c?.to === 'commercial') cueEvent(s, `is_commercial = true: a commercial break started. Why: ${c.reasons.join('; ')}`, 'break');
+    else if (c?.to === 'game' && c.from === 'commercial') cueEvent(s, `is_commercial = false: the game is back. Why: ${c.reasons.join('; ')}`, 'break');
+    else if (c) cueEvent(s, `detector: ${c.to === 'game' ? 'ready' : 'learning again'} (${c.reasons.join('; ')})`, 'note');
+  }
+  drawOverlayBoxes();
+  renderDetect();
+}
+
+// Boxes over the video, where the picture's content is (object-fit: contain leaves bars).
+function drawOverlayBoxes() {
+  const v = big()?.video;
+  if (!detect.on || !detect.draw || !detectLast || !v?.videoWidth) return overlayBoxes.replaceChildren();
+  const r = v.getBoundingClientRect();
+  const aspect = v.videoWidth / v.videoHeight;
+  let w = r.width;
+  let h = r.height;
+  if (w / h > aspect) w = h * aspect;
+  else h = w / aspect;
+  const left = r.left + (r.width - w) / 2;
+  const top = r.top + (r.height - h) / 2;
+  overlayBoxes.replaceChildren(
+    ...detectLast.overlays.map((o) => {
+      const d = document.createElement('div');
+      d.className = o.watermark ? 'watermark' : o.present ? '' : 'gone';
+      if (o.box.y < 0.1) d.classList.add('top'); // label below, so it stays on screen
+      const pad = 3;
+      d.style.left = `${left + o.box.x * w - pad}px`;
+      d.style.top = `${top + o.box.y * h - pad}px`;
+      d.style.width = `${o.box.w * w + pad * 2}px`;
+      d.style.height = `${o.box.h * h + pad * 2}px`;
+      const label = document.createElement('span');
+      label.textContent = `${o.kind}${o.watermark ? ' (watermark, ignored)' : o.present ? '' : ' (gone)'} ${o.score.toFixed(2)}`;
+      d.append(label);
+      return d;
+    }),
+  );
+}
+addEventListener('resize', drawOverlayBoxes);
+
+function renderDetect() {
+  const el = detectEls.status;
+  if (!detect.on) return (el.textContent = '');
+  if (detectError) return (el.textContent = `Detector: ${detectError}`);
+  const r = detectLast;
+  if (!r) return (el.textContent = 'Starting… (it waits while the video is paused or the tab is hidden)');
+  const watched = r.overlays.filter((o) => !o.watermark).map((o) => `${o.kind} ${o.place}${o.present ? '' : ' (gone)'}`);
+  const state =
+    r.state === 'learning'
+      ? `Learning: looking for overlays that stay put (about 30 s of game)${r.learning.length ? `; ${r.learning.length} maybe` : ''}`
+      : `${r.state === 'commercial' ? 'Commercial break' : 'Game'}; watching ${watched.join(', ')}`;
+  const avg = (k) => detectCost.reduce((a, c) => a + c[k], 0) / detectCost.length;
+  el.textContent = `${state}. Per look (twice a second): ${avg('grabMs').toFixed(1)} ms to copy the picture (GPU, not blocking), ${avg('workMs').toFixed(1)} ms of analysis in a worker. Lost frames are counted in the stream's details above.`;
+}
+
+function applyDetect() {
+  detectEls.on.checked = detect.on;
+  detectEls.draw.checked = detect.draw;
+  detectEls.log.checked = detect.log;
+  detectEls.missing.value = String(detect.missingS);
+  detector.setOptions({ missingS: detect.missingS });
+  if (detect.on) detector.start();
+  else {
+    detector.stop();
+    detectLast = null;
+    detectError = '';
+  }
+  drawOverlayBoxes();
+  renderDetect();
+}
+function saveDetect() {
+  applyDetect();
+  chrome.storage.local.set({ detect }).catch((err) => failPage(`Couldn't save the commercial detection settings: ${err.message}`));
+}
+chrome.storage.local
+  .get('detect')
+  .then(({ detect: saved }) => {
+    detect = { ...detect, ...saved };
+    applyDetect();
+  })
+  .catch((err) => failPage(`Couldn't read the commercial detection settings: ${err.message}`));
+detectEls.on.addEventListener('change', () => {
+  detect.on = detectEls.on.checked;
+  logEvent(null, `commercial detector turned ${detect.on ? 'on' : 'off'}`);
+  saveDetect();
+});
+detectEls.draw.addEventListener('change', () => {
+  detect.draw = detectEls.draw.checked;
+  saveDetect();
+});
+detectEls.log.addEventListener('change', () => {
+  detect.log = detectEls.log.checked;
+  logEvent(null, `is_commercial logging turned ${detect.log ? 'on' : 'off'}`);
+  saveDetect();
+});
+detectEls.missing.addEventListener('change', () => {
+  detect.missingS = Number(detectEls.missing.value);
+  saveDetect();
+});
+document.getElementById('detect-relearn').addEventListener('click', () => {
+  detector.relearn();
+  detectLast = null;
+  logEvent(big() ?? null, 'detector: relearning the scorebug and logo');
+  drawOverlayBoxes();
+  renderDetect();
+});
+
 // Playlist tags that carry or hint at ad breaks. hls.js keeps tags it doesn't use on the segment
 // they come before (frag.tagList), as [name, value]; a discontinuity is ["DIS"].
 const CUE_TAG = /CUE|SCTE|SPLICE|OATCLS|^EXT-X-DATERANGE$|^EXT-X-ASSET|^EXT-X-AD/;
@@ -1918,6 +2058,12 @@ function rememberFold(details, key, name) {
 }
 const playUrl = document.getElementById('play-url');
 rememberFold(playUrl, 'playUrlOpen', 'Play a URL');
+const detectFold = document.getElementById('commercial-detection');
+rememberFold(detectFold, 'detectOpen', 'Commercial detection');
+chrome.storage.local
+  .get('detectOpen')
+  .then(({ detectOpen }) => (detectFold.open = detectOpen === true))
+  .catch((err) => failPage(`Couldn't read whether "Commercial detection" is open: ${err.message}`));
 
 form.addEventListener('submit', (e) => {
   e.preventDefault();

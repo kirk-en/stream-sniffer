@@ -119,6 +119,19 @@ body.player { background: #000; overflow: hidden; }
 .player #problems .dismiss:hover { color: var(--text); border-color: var(--border); }
 .player .warn { color: var(--warn, #f0b429); }
 .player #problems .ok { color: #5bd27a; }
+/* The detector's boxes over the video: where it thinks the scorebug and logo are. */
+.player #overlay-boxes { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
+.player #overlay-boxes div { position: fixed; box-sizing: border-box; border: 2px solid #5bd27a; border-radius: 2px; }
+.player #overlay-boxes div.gone { border-color: #ff5d5d; border-style: dashed; }
+.player #overlay-boxes div.watermark { border-color: #9aa0a6; border-style: dotted; }
+.player #overlay-boxes span {
+  position: absolute; left: -2px; bottom: 100%; padding: 1px 4px; white-space: nowrap; font-size: 11px;
+  background: rgba(0, 0, 0, 0.75); color: #fff; border-radius: 2px;
+}
+.player #overlay-boxes div.top span { bottom: auto; top: 100%; }
+.player #menu .detect { display: grid; gap: 8px; margin-top: 8px; }
+.player #menu label.inline { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.player #menu label.inline select { padding: 2px 6px; }
 /* Ad-break cues: bottom left, above the bar, and not hidden with it. */
 .player #cues {
   position: fixed; left: 12px; bottom: 68px; z-index: 2; width: min(520px, calc(100vw - 24px)); box-sizing: border-box;

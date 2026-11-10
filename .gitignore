@@ -2,3 +2,4 @@ node_modules/
 test/artifacts/
 test/fixtures/stream/
 test/fixtures/stream-b/
+test/fixtures/detector/
