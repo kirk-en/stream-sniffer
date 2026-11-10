@@ -1018,6 +1018,7 @@ const detectEls = {
   on: document.getElementById('detect-on'),
   draw: document.getElementById('detect-draw'),
   field: document.getElementById('detect-field'),
+  raw: document.getElementById('detect-raw'),
   log: document.getElementById('detect-log'),
   options: document.getElementById('detect-options'),
   missing: document.getElementById('detect-missing'),
@@ -1026,7 +1027,7 @@ const detectEls = {
   status: document.getElementById('detect-status'),
 };
 const overlayBoxes = document.getElementById('overlay-boxes');
-let detect = { on: false, draw: false, field: false, log: false, missingS: 4, fieldCutoff: 0.3 };
+let detect = { on: false, draw: false, field: false, raw: false, log: false, missingS: 4, fieldCutoff: 0.3 };
 let detectLast = null; // the latest result
 let detectError = '';
 const detectCost = []; // the last few samples' { grabMs, workMs }
@@ -1216,8 +1217,36 @@ function renderSuggestion() {
   detectEls.suggest.title = tip;
 }
 
+// Raw output mode, top right: what the detector sees this moment (🗨️ logo, 🐞 scorebug,
+// 🌱 grass), and the countdown when a switch is on its way.
+const rawOutput = document.getElementById('raw-output');
+function renderRawOutput() {
+  rawOutput.hidden = !detect.on || !detect.raw;
+  if (rawOutput.hidden) return;
+  const r = detectLast;
+  const line = (emoji, v) => {
+    const span = document.createElement('span');
+    span.className = v == null ? 'none' : String(v);
+    span.textContent = v == null ? '—' : v ? 'True' : 'False';
+    const row = document.createElement('div');
+    row.append(`${emoji}: `, span);
+    return row;
+  };
+  const rows = [line('🗨️', r?.raw.logo ?? null), line('🐞', r?.raw.scorebug ?? null), line('🌱', r?.raw.grass ?? null)];
+  const c = r?.countdown;
+  if (c) {
+    const count = document.createElement('span');
+    count.className = 'count';
+    count.textContent =
+      c.to === 'held' ? '🌱 holding: likely a replay' : `${c.to === 'commercial' ? '📺 commercial' : '🏈 game'} in ${Math.max(0, c.left).toFixed(1)} s`;
+    rows.push(count);
+  }
+  rawOutput.replaceChildren(...rows);
+}
+
 function renderDetect() {
   renderDetectState();
+  renderRawOutput();
   renderSuggestion();
   renderLearnBtn();
   renderFieldMeter();
@@ -1245,6 +1274,7 @@ function applyDetect() {
   detectEls.on.checked = detect.on;
   detectEls.draw.checked = detect.draw;
   detectEls.field.checked = detect.field;
+  detectEls.raw.checked = detect.raw;
   detectEls.log.checked = detect.log;
   detectEls.options.hidden = !detect.on; // the rest only matters while it watches
   detectEls.missing.value = String(detect.missingS);
@@ -1274,6 +1304,10 @@ chrome.storage.local
 detectEls.on.addEventListener('change', () => {
   detect.on = detectEls.on.checked;
   logEvent(null, `commercial detector turned ${detect.on ? 'on' : 'off'}`);
+  saveDetect();
+});
+detectEls.raw.addEventListener('change', () => {
+  detect.raw = detectEls.raw.checked;
   saveDetect();
 });
 detectEls.field.addEventListener('change', () => {

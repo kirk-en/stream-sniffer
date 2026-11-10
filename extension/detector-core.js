@@ -366,6 +366,13 @@
           ? { share: this.fieldShare, baseline: this.field.baseline, suggested: this.field.suggested, cutoff: this.options.fieldCutoff, on: this.fieldOn() }
           : null,
         waitingFor: this.waitingFor ?? '',
+        // What's seen right now, before any timing: true, false, or null (not learned).
+        raw: {
+          logo: this.seen('logo'),
+          scorebug: this.seen('scorebug'),
+          grass: this.field ? this.fieldOn() : null,
+        },
+        countdown: this.countdown,
       };
     }
 
@@ -554,6 +561,12 @@
       events.push(`field check on: this field's green (hue ${f.h0}-${f.h1}) fills about ${pct(f.baseline)} of the picture in wide shots (${frames.length} frames); suggested cut-off ${pct(f.suggested)}, using ${pct(this.options.fieldCutoff)}`);
     }
 
+    // Whether a learned overlay of this kind is on screen now; null when none is learned.
+    seen(kind) {
+      const of = this.overlays.filter((o) => o.kind === kind && !o.watermark);
+      return of.length ? of.some((o) => o.present) : null;
+    }
+
     fieldOn() {
       return !!this.field && this.fieldShare >= this.options.fieldCutoff;
     }
@@ -735,6 +748,7 @@
     // is_commercial: everything watched (the scorebug and the network logo) gone for missingS
     // starts a break; any of them back for returnS ends it.
     decide(dt, events = []) {
+      this.countdown = null; // a switch on its way: { to: 'commercial' | 'game', left } or { to: 'held' }
       const watched = this.overlays.filter((o) => !o.watermark);
       this.health(watched);
       if (this.unreliable) {
@@ -782,6 +796,8 @@
           this.heldNoted = false;
         }
         this.goneFor = allGone && !field ? this.goneFor + dt : 0;
+        if (field) this.countdown = { to: 'held' };
+        else if (this.goneFor > 0 && this.goneFor < this.options.missingS) this.countdown = { to: 'commercial', left: this.options.missingS - this.goneFor };
         if (this.goneFor < this.options.missingS) return null;
         this.state = 'commercial';
         this.breakStart = this.t - this.goneFor;
@@ -793,8 +809,14 @@
         if (this.field) reasons.push(`only ${pct(this.fieldShare)} of the picture is field (cut-off ${pct(this.options.fieldCutoff)})`);
         return { to: 'commercial', from: 'game', reasons };
       }
-      // In a break.
-      if (!back.length) return null;
+      // In a break. How far along a return is: all of them back, or one clearly.
+      if (!back.length) {
+        const present = watched.filter((o) => o.present);
+        const allProgress = present.length === watched.length ? Math.min(...present.map((o) => o.backFor)) : 0;
+        const progress = Math.max(allProgress, ...present.map((o) => o.clearFor ?? 0));
+        if (progress > 0) this.countdown = { to: 'game', left: returnS - progress };
+        return null;
+      }
       this.state = 'game';
       this.goneFor = 0;
       const reasons = [

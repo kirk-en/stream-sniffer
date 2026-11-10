@@ -266,6 +266,25 @@ const changes = (out) => out.filter((x) => typeof x === 'object');
   assert(changes(out2).some((c) => c.to === 'commercial'), "with a cut-off above the replay's field share, it is a break");
 }
 
+// 4f. Raw output: what's seen now, and the countdown to a switch.
+{
+  const a = learner();
+  const out = run(a, 45, { look: 'pitch' });
+  const raw = out.last.raw;
+  assert(raw.logo === true && raw.scorebug === true && raw.grass === true && !out.last.countdown, `in play: logo, scorebug and grass all seen, no countdown (${JSON.stringify(raw)})`);
+  run(a, 2, { bug: false, logo: false, look: 'pitch' }, out);
+  assert(out.last.raw.logo === false && out.last.raw.scorebug === false && out.last.countdown?.to === 'held', `overlays gone over the field: both false, held as a replay (${JSON.stringify(out.last.countdown)})`);
+  run(a, 2, { bug: false, logo: false, look: 'ad' }, out);
+  const c = out.last.countdown;
+  assert(c?.to === 'commercial' && c.left > 0 && c.left < 4 && out.last.raw.grass === false, `over an ad: a countdown to the commercial (${c?.left.toFixed(1)} s left), grass false`);
+  run(a, 10, { bug: false, logo: false, look: 'ad' }, out);
+  run(a, 1, { look: 'pitch' }, out);
+  const back = out.last.countdown;
+  assert(back?.to === 'game' && back.left > 0 && back.left <= 2, `both back for a moment: a countdown to the game (${back?.left.toFixed(1)} s left)`);
+  const fresh = new Analyzer().push(frame({}), 0.5).raw;
+  assert(fresh.logo === null && fresh.scorebug === null && fresh.grass === null, 'before learning: nothing to say (null)');
+}
+
 // 5. Nothing is learned until Learn is pressed, and learning stops after 40 s.
 {
   const a = new Analyzer();

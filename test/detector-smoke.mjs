@@ -77,7 +77,7 @@ async function main() {
     await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().endsWith('/background.js'), { timeout: 10000 });
     const ext = [...(await browser.extensions()).values()].find((e) => e.path === extDir);
     const [sw] = await ext.workers();
-    await sw.evaluate(() => chrome.storage.local.set({ detect: { on: true, draw: true, field: true, log: true, missingS: 4 } }));
+    await sw.evaluate(() => chrome.storage.local.set({ detect: { on: true, draw: true, field: true, raw: true, log: true, missingS: 4 } }));
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 720 });
     const errors = [];
@@ -110,12 +110,12 @@ async function main() {
     await page.click('#learn-btn');
     await page.waitForFunction(() => /Learning…/.test(document.getElementById('learn-btn').textContent), { timeout: 5000 });
     console.log('     pressed Learn at 8 s, cancelled it, pressed it again');
-    await at(GAME_END - 3);
+    await at(REPLAY[0] - 3);
     const during = await page.evaluate(() => ({
       boxes: [...document.querySelectorAll('#overlay-boxes div')].map((d) => `${d.classList.contains('gone') ? 'gone' : d.classList.contains('watermark') ? 'watermark' : 'present'}: ${d.textContent}`),
       status: document.getElementById('detect-status').textContent,
     }));
-    console.log(`     boxes at ${GAME_END - 3} s: ${during.boxes.join(' | ')}`);
+    console.log(`     boxes at ${REPLAY[0] - 3} s: ${during.boxes.join(' | ')}`);
     console.log(`     status: ${during.status}`);
     assert(during.boxes.some((b) => /^present: scorebug/.test(b)), 'a green box on the scorebug');
     assert(during.boxes.some((b) => /^present: logo/.test(b)), 'a green box on the logo');
@@ -136,11 +136,29 @@ async function main() {
     assert(/💡 Suggested: \d+%/.test(sug.hint) && /Suggested grass cut-off, based on the field sampled/.test(sug.tip), `a suggested cut-off next to the menu, with a tip on where it's from ("${sug.hint}")`);
     assert(sug.marked.length === 1 && /Suggested grass cut-off/.test(sug.marked[0].tip), `and one choice marked "(suggested)", with the same tip ("${sug.marked[0]?.text}")`);
 
+    // Raw output, top right.
+    const rawText = () => page.evaluate(() => document.getElementById('raw-output').innerText.replace(/\s+/g, ' ').trim());
+    const raw = await page.evaluate(() => {
+      const r = document.getElementById('raw-output').getBoundingClientRect();
+      return { right: innerWidth - r.right, top: r.top, shown: !document.getElementById('raw-output').hidden };
+    });
+    const rawNow = await rawText();
+    assert(raw.shown && raw.right < 40 && raw.top < 120 && rawNow === '🗨️: True 🐞: True 🌱: True', `raw output at the top right, all seen in play ("${rawNow}")`);
+
     // The replay: both overlays gone, the field still there. Not a break.
     await at(REPLAY[1] - 1);
+    const rawReplay = await rawText();
+    assert(rawReplay === '🗨️: False 🐞: False 🌱: True 🌱 holding: likely a replay', `in the replay, raw output says so ("${rawReplay}")`);
     const inReplay = await page.evaluate(() => ({ badge: document.getElementById('detect-state').textContent, log: document.getElementById('cue-list').textContent }));
     assert(/🏈 GAME/.test(inReplay.badge) && /🌱.*likely a replay/.test(inReplay.log), `in the replay (overlays gone, field on screen) it stays the game, and says why ("${inReplay.badge}")`);
     assert(/🌱 detector: field check on/.test(inReplay.log), "it learned the field's green while learning");
+
+    // The ad's first seconds: a countdown to the commercial.
+    const toAd = await page.waitForFunction(() => {
+      const t = document.getElementById('raw-output').innerText.replace(/\s+/g, ' ').trim();
+      return /📺 commercial in \d+\.\d s/.test(t) && t;
+    }, { timeout: (GAME_END - REPLAY[1] + 15) * 1000, polling: 100 });
+    assert(true, `as the ad starts, raw output counts down to the commercial ("${await toAd.jsonValue()}")`);
 
     await at(BREAK_END - 2);
     const badge = () => page.evaluate(() => document.getElementById('detect-state').textContent);

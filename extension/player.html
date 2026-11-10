@@ -38,6 +38,8 @@
   <div id="overlay-boxes"></div>
   <!-- How much of the picture is the field now (Show the field share). -->
   <div id="field-meter" hidden></div>
+  <!-- Raw output mode: what the detector sees right now, and a switch on its way. -->
+  <div id="raw-output" hidden></div>
   <!-- Top left: problems, then the ad-break log. -->
   <div id="top-left">
     <div id="problems"></div>
@@ -65,6 +67,7 @@
         <!-- Only shown while the detector is on. -->
         <div id="detect-options" class="detect" hidden>
         <label class="toggle" title="Green: on screen. Red, dashed: gone. Grey: taken for the site's watermark and ignored."><input id="detect-draw" type="checkbox"> Draw boxes around what it finds</label>
+        <label class="toggle" title="Top right: what the detector sees right now (🗨️ logo, 🐞 scorebug, 🌱 grass), before any timing, and the countdown when a switch to a commercial or back to the game is on its way"><input id="detect-raw" type="checkbox"> Raw output mode</label>
         <label class="toggle" title="Bottom right: how much of the picture is this game's field now, and how much it is in play. Green while it counts as the field being on screen (a replay, not a break, if the overlays go)."><input id="detect-field" type="checkbox"> Show the field share (🌱 %)</label>
         <label class="toggle" title="Writes is_commercial changes, with why, to the box at the top left and to Copy log"><input id="detect-log" type="checkbox"> Log commercial breaks (is_commercial), with why</label>
         <label class="inline">Call a break once both are gone for
