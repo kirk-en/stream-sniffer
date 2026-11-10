@@ -25,6 +25,13 @@
   const PRESENT_T = 0.35; // match score at or above: the overlay is on screen
   const ABSENT_T = 0.2; // below: it's gone (in between: as it was)
   const LEARN_S = 40; // how long learning runs after it's asked for (see relearn)
+  // The game is back when the scorebug is, matching at least this well; or, with no scorebug yet
+  // (a shot of the stadium first), when the logo alone has been back this long. A logo alone for
+  // a moment is often an ad's or a promo's.
+  const BUG_BACK_T = 0.5;
+  const LOGO_ALONE_S = 30;
+  const LOGO_ALONE_T = 0.6;
+  const BUG_GAP = 0.15; // a "logo" on the scorebug's row, this close (of the width), is part of it
   // When the detection is too shaky to trust (see health): it stops calling breaks until relearned.
   const CHECK_S = 10; // after learning, each overlay is watched this long...
   const WEAK_T = 0.4; // ...and has to match at least this well on average
@@ -85,6 +92,13 @@
     }
     return far;
   }
+  // Whether a logo's box is part of a scorebug's: on its row (half its height or more alongside
+  // it) and next to it or inside it. A team's logo at the end of the scorebug is that.
+  const alongside = (logo, bug) => {
+    const overlapY = Math.min(logo.y + logo.h, bug.y + bug.h) - Math.max(logo.y, bug.y);
+    const gapX = Math.max(0, bug.x - (logo.x + logo.w), logo.x - (bug.x + bug.w));
+    return overlapY >= logo.h * 0.5 && gapX <= W * BUG_GAP;
+  };
   const fmt = (s) => (s >= 60 ? `${Math.floor(s / 60)} min ${Math.round(s % 60)} s` : `${s.toFixed(1)} s`);
 
   class Analyzer {
@@ -378,9 +392,11 @@
           continue;
         }
         // New ones only while learning was asked for, and never in a break (an ad's own steady
-        // graphic would end it), and not a watermark already found.
+        // graphic would end it), and not a watermark already found, and not a piece of the
+        // scorebug (a team's logo at its end): that would be watching the scorebug twice.
         if (this.t >= this.learnUntil || this.state === 'commercial') continue;
         if (f.kind === 'logo' && this.watermarks.some((b) => iou(b, f.box) > 0.3)) continue;
+        if (f.kind === 'logo' && this.partOfBug(f.box, found)) continue;
         const cand = this.candidates.find((c) => c.kind === f.kind && iou(c.box, f.box) > 0.3);
         if (!cand) {
           this.candidates.push({ ...f, sightings: 1, seenAt: this.t });
@@ -393,6 +409,12 @@
       }
       // Candidates not seen this time start over.
       this.candidates = this.candidates.filter((c) => c.seenAt === this.t);
+    }
+
+    // Whether a box touches a scorebug: learned, about to be, or found in this look.
+    partOfBug(box, found = []) {
+      const bugs = [...this.overlays, ...this.candidates, ...found].filter((x) => x.kind === 'scorebug');
+      return bugs.some((b) => alongside(box, b.box));
     }
 
     learn(c, events) {
@@ -418,6 +440,12 @@
         const old = this.overlays.find((x) => x.kind === 'scorebug');
         if (old && old.box.w * old.box.h >= o.box.w * o.box.h) return;
         if (old) this.overlays.splice(this.overlays.indexOf(old), 1);
+        // A "logo" learned before it that's really part of it goes.
+        for (const x of [...this.overlays]) {
+          if (x.kind !== 'logo' || !alongside(x.box, o.box)) continue;
+          this.overlays.splice(this.overlays.indexOf(x), 1);
+          events.push(`dropped the ${this.describe(x)}: it's part of the scorebug (a team's logo, likely), not the network's`);
+        }
       } else if (this.overlays.some((x) => x.kind === 'logo' && x.place === o.place)) {
         return; // one logo per corner
       }
@@ -586,7 +614,12 @@
         return { to: 'game', from: 'learning', reasons: [`watching the ${watched.map((o) => this.describe(o)).join(' and the ')}`] };
       }
       const allGone = watched.every((o) => !o.present);
-      const back = watched.filter((o) => o.present && o.backFor >= this.options.returnS);
+      // Back: the scorebug, clearly, for returnS (with whatever else is back too); or with no
+      // scorebug yet, a logo alone, clearly, for LOGO_ALONE_S.
+      const bugBack = watched.find((o) => o.kind === 'scorebug' && o.present && o.backFor >= this.options.returnS && o.score >= BUG_BACK_T);
+      const back = bugBack
+        ? [bugBack, ...watched.filter((o) => o !== bugBack && o.present)]
+        : watched.filter((o) => o.kind === 'logo' && o.present && o.backFor >= LOGO_ALONE_S && o.score >= LOGO_ALONE_T);
       if (this.state === 'game') {
         // Every one of them gone, each for the whole time: one still on screen resets the count.
         this.goneFor = allGone ? this.goneFor + dt : 0;
@@ -605,6 +638,7 @@
       this.state = 'game';
       this.goneFor = 0;
       const reasons = back.map((o) => `${this.describe(o)} back for ${fmt(o.backFor)} (match ${o.score.toFixed(2)})`);
+      if (!bugBack) reasons.push(`no scorebug yet, but the logo has been back ${LOGO_ALONE_S} s`);
       const lasted = this.t - this.breakStart - back[0].backFor;
       reasons.push(`the break lasted ${fmt(lasted)}`);
       if (lasted < SHORT_BREAK_S) {

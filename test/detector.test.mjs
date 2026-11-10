@@ -50,7 +50,7 @@ function graphic(px, x0, y0, w, h) {
     }
   }
 }
-function frame({ bug = true, logo = true, watermark = false, black = false } = {}) {
+function frame({ bug = true, logo = true, watermark = false, team = false, black = false } = {}) {
   const rgba = new Uint8ClampedArray(W * H * 4);
   const px = (x, y, v) => {
     const j = (y * W + x) * 4;
@@ -64,7 +64,8 @@ function frame({ bug = true, logo = true, watermark = false, black = false } = {
   background(px);
   if (bug) graphic(px, 80, 180, 220, 22); // bottom middle
   if (logo) graphic(px, 330, 12, 36, 20); // top right
-  if (watermark) graphic(px, 10, 190, 30, 14); // bottom left, never goes
+  if (watermark) graphic(px, 10, 12, 30, 14); // top left, never goes
+  if (team) graphic(px, 20, 182, 30, 18); // a team's logo on the scorebug's row, left of it
   return rgba;
 }
 
@@ -158,7 +159,7 @@ const changes = (out) => out.filter((x) => typeof x === 'object');
     run(a, 20, { watermark: true }, out);
   }
   assert(!changes(out).some((c) => c.to === 'commercial'), 'while the watermark counts, breaks are held back (it is still on screen)');
-  const flagged = out.find((x) => typeof x === 'string' && /ignoring the logo \(bottom-left\)/.test(x));
+  const flagged = out.find((x) => typeof x === 'string' && /ignoring the logo \(top-left\)/.test(x));
   assert(!!flagged, `spots the watermark after 3 breaks: ${flagged}`);
   assert(!out.last.overlays.find((o) => o.place === 'top-right').watermark, "the network's logo isn't taken for a watermark");
   run(a, 10, { bug: false, logo: false, watermark: true }, out);
@@ -175,6 +176,34 @@ const changes = (out) => out.filter((x) => typeof x === 'object');
   run(h, 600, { bug: false }, out2);
   run(h, 10, {}, out2);
   assert(!out2.last.overlays.some((o) => o.watermark), "10 min of halftime with the network's logo up: still not a watermark");
+}
+
+// 4b. A team's logo at the end of the scorebug isn't taken for the network's logo.
+{
+  const a = learner();
+  const out = run(a, 60, { team: true });
+  const places = out.last.overlays.map((o) => `${o.kind} ${o.place}`).sort().join(', ');
+  assert(places === 'logo top-right, scorebug bottom-middle', `learns the scorebug and the network logo, not the team's logo (${places})`);
+}
+
+// 4c. Back from a break only with the scorebug: a logo alone for a moment (an ad's, a promo's)
+// doesn't end it.
+{
+  const a = learner();
+  const out = run(a, 60, {});
+  run(a, 20, { bug: false, logo: false }, out);
+  run(a, 10, { bug: false }, out); // the network's logo, in a promo
+  assert(!changes(out).some((c) => c.to === 'game' && c.from === 'commercial'), 'the logo back for 10 s without the scorebug: still a break');
+  run(a, 4, {}, out);
+  const back = changes(out).find((c) => c.to === 'game' && c.from === 'commercial');
+  assert(!!back && /scorebug \(bottom-middle\) back/.test(back.reasons[0]), `the scorebug back: the game is back (${back?.reasons.join('; ')})`);
+  // A stadium shot first, logo only, for a long time: back after 30 s.
+  const b = learner();
+  const out2 = run(b, 60, {});
+  run(b, 20, { bug: false, logo: false }, out2);
+  run(b, 35, { bug: false }, out2);
+  const back2 = changes(out2).find((c) => c.to === 'game' && c.from === 'commercial');
+  assert(!!back2 && back2.reasons.some((x) => /no scorebug yet/.test(x)), `the logo alone for 30 s ends it too (${back2?.reasons.join('; ')})`);
 }
 
 // 5. Nothing is learned until Learn is pressed, and learning stops after 40 s.
