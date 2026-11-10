@@ -1021,10 +1021,12 @@ const detectEls = {
   log: document.getElementById('detect-log'),
   options: document.getElementById('detect-options'),
   missing: document.getElementById('detect-missing'),
+  cutoff: document.getElementById('detect-cutoff'),
+  suggest: document.getElementById('field-suggest'),
   status: document.getElementById('detect-status'),
 };
 const overlayBoxes = document.getElementById('overlay-boxes');
-let detect = { on: false, draw: false, field: false, log: false, missingS: 4 };
+let detect = { on: false, draw: false, field: false, log: false, missingS: 4, fieldCutoff: 0.3 };
 let detectLast = null; // the latest result
 let detectError = '';
 const detectCost = []; // the last few samples' { grabMs, workMs }
@@ -1177,6 +1179,10 @@ function renderFieldMeter() {
   fieldMeter.classList.toggle('on', !!f?.on);
   if (f) {
     fieldMeter.replaceChildren(`🌱 ${Math.round(f.share * 100)}% `);
+    const cut = document.createElement('span');
+    cut.className = 'base';
+    cut.textContent = `· cut-off ${Math.round(f.cutoff * 100)}% `;
+    fieldMeter.append(cut);
     const base = document.createElement('span');
     base.className = 'base';
     base.textContent = `· play ${Math.round(f.baseline * 100)}%`;
@@ -1188,8 +1194,31 @@ function renderFieldMeter() {
   }
 }
 
+// The suggested cut-off, from the field sampled while learning: marked in the menu's choices,
+// and next to them, each with a tip saying where it comes from.
+let shownSuggestion = null;
+function renderSuggestion() {
+  const f = detect.on ? detectLast?.field : null;
+  const sug = f?.suggested ?? null;
+  if (sug === shownSuggestion) return; // only on a change: not while the list may be open
+  shownSuggestion = sug;
+  const tip = sug == null
+    ? ''
+    : `Suggested grass cut-off, based on the field sampled while learning: about half of the ${Math.round(f.baseline * 100)}% the field filled in wide shots of play. A replay looks like play; an ad has next to no field.`;
+  for (const o of detectEls.cutoff.options) {
+    const v = Number(o.value);
+    const mine = sug != null && Math.abs(v - sug) < 1e-6;
+    o.textContent = `${Math.round(v * 100)}%${mine ? ' (suggested)' : ''}`;
+    o.title = mine ? tip : '';
+  }
+  detectEls.suggest.hidden = sug == null;
+  detectEls.suggest.textContent = sug == null ? '' : `💡 Suggested: ${Math.round(sug * 100)}%`;
+  detectEls.suggest.title = tip;
+}
+
 function renderDetect() {
   renderDetectState();
+  renderSuggestion();
   renderLearnBtn();
   renderFieldMeter();
   const el = detectEls.status;
@@ -1203,7 +1232,7 @@ function renderDetect() {
       ? `Not trusted, so no breaks are called: ${r.unreliable}. Press Relearn (top left) during normal play`
       : r.state !== 'learning'
       ? `${r.state === 'commercial' ? 'Commercial break' : 'Game'}; watching ${watched.join(', ')}${
-          r.field ? `; field ${Math.round(r.field.share * 100)}% of the picture (in play about ${Math.round(r.field.baseline * 100)}%${r.field.on ? '' : ', so not the game'})` : ''
+          r.field ? `; field ${Math.round(r.field.share * 100)}% of the picture (cut-off ${Math.round(r.field.cutoff * 100)}%, ${Math.round(r.field.baseline * 100)}% in play${r.field.on ? '' : '; under the cut-off'})` : ''
         }`
       : r.learnLeft > 0
         ? `Learning for ${Math.ceil(r.learnLeft)} s more: looking for overlays that stay put; still needs ${r.waitingFor}`
@@ -1219,7 +1248,8 @@ function applyDetect() {
   detectEls.log.checked = detect.log;
   detectEls.options.hidden = !detect.on; // the rest only matters while it watches
   detectEls.missing.value = String(detect.missingS);
-  detector.setOptions({ missingS: detect.missingS });
+  detectEls.cutoff.value = String(detect.fieldCutoff);
+  detector.setOptions({ missingS: detect.missingS, fieldCutoff: detect.fieldCutoff });
   if (detect.on) detector.start();
   else {
     detector.stop();
@@ -1257,6 +1287,11 @@ detectEls.draw.addEventListener('change', () => {
 detectEls.log.addEventListener('change', () => {
   detect.log = detectEls.log.checked;
   logEvent(null, `is_commercial logging turned ${detect.log ? 'on' : 'off'}`);
+  saveDetect();
+});
+detectEls.cutoff.addEventListener('change', () => {
+  detect.fieldCutoff = Number(detectEls.cutoff.value);
+  logEvent(null, `field cut-off set to ${Math.round(detect.fieldCutoff * 100)}%`);
   saveDetect();
 });
 detectEls.missing.addEventListener('change', () => {

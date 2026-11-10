@@ -136,6 +136,8 @@ body.player { background: #000; overflow: hidden; }
 .player #menu #detect-options[hidden] { display: none; }
 .player #menu label.inline { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .player #menu label.inline select { padding: 2px 6px; }
+.player #menu #field-suggest { color: #5bd27a; cursor: help; }
+.player #menu #field-suggest[hidden] { display: none; }
 /* The field share: bottom right, above the bar, and not hidden with it. */
 .player #field-meter {
   position: fixed; right: 12px; bottom: 68px; z-index: 2; padding: 4px 10px; border-radius: 6px;

@@ -126,8 +126,15 @@ async function main() {
       const r = m.getBoundingClientRect();
       return { text: m.textContent, on: m.classList.contains('on'), shown: !m.hidden, right: innerWidth - r.right, bottom: innerHeight - r.bottom };
     });
-    assert(meter.shown && /^🌱 \d+% · play \d+%$/.test(meter.text) && meter.on, `the field share shows at the bottom right ("${meter.text}", ${Math.round(meter.right)} px from the right, ${Math.round(meter.bottom)} px from the bottom)`);
+    assert(meter.shown && /^🌱 \d+% · cut-off 30% · play \d+%$/.test(meter.text) && meter.on, `the field share shows at the bottom right ("${meter.text}", ${Math.round(meter.right)} px from the right, ${Math.round(meter.bottom)} px from the bottom)`);
     assert(meter.right < 40 && meter.bottom < 100, 'in the bottom right corner');
+    const sug = await page.evaluate(() => ({
+      hint: document.getElementById('field-suggest').textContent,
+      tip: document.getElementById('field-suggest').title,
+      marked: [...document.getElementById('detect-cutoff').options].filter((o) => /\(suggested\)/.test(o.textContent)).map((o) => ({ text: o.textContent, tip: o.title })),
+    }));
+    assert(/💡 Suggested: \d+%/.test(sug.hint) && /Suggested grass cut-off, based on the field sampled/.test(sug.tip), `a suggested cut-off next to the menu, with a tip on where it's from ("${sug.hint}")`);
+    assert(sug.marked.length === 1 && /Suggested grass cut-off/.test(sug.marked[0].tip), `and one choice marked "(suggested)", with the same tip ("${sug.marked[0]?.text}")`);
 
     // The replay: both overlays gone, the field still there. Not a break.
     await at(REPLAY[1] - 1);

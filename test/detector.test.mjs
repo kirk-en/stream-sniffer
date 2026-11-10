@@ -244,6 +244,28 @@ const changes = (out) => out.filter((x) => typeof x === 'object');
   assert(out3.some((x) => typeof x === 'string' && /field check off/.test(x)) && !out3.last.field, 'learned over no field: the field check is off, and it says so');
 }
 
+// 4e. Learning the field: stops when done, from clean frames only, and suggests a cut-off.
+{
+  // Close-ups (no field) mixed in while learning are left out, not averaged in.
+  const a = learner();
+  const out = [];
+  for (let i = 0; i < 30; i++) {
+    run(a, 1, { look: 'pitch' }, out);
+    run(a, 1, { look: i % 2 ? 'ad' : 'pitch', bug: true, logo: true }, out); // every other second: a close-up
+  }
+  const f = out.last.field;
+  assert(f && f.baseline > 0.8, `close-ups while learning don't drag the field in play down (${pct(f?.baseline ?? 0)})`);
+  const done = out.find((x) => typeof x === 'string' && /learning done in/.test(x));
+  assert(!!done && parseFloat(done) < 40, `learning stops when it has the overlays and the field: ${done}`);
+  assert(f.suggested === 0.5 && f.cutoff === 0.3, `suggests a cut-off of about half the field in play (${pct(f.suggested)}), and uses the chosen one (${pct(f.cutoff)})`);
+
+  // The cut-off is the viewer's: one higher than a replay's field share calls it a break.
+  const b = learner({ fieldCutoff: 1.01 }); // above any picture's share
+  const out2 = run(b, 45, { look: 'pitch' });
+  run(b, 10, { bug: false, logo: false, look: 'pitch' }, out2);
+  assert(changes(out2).some((c) => c.to === 'commercial'), "with a cut-off above the replay's field share, it is a break");
+}
+
 // 5. Nothing is learned until Learn is pressed, and learning stops after 40 s.
 {
   const a = new Analyzer();

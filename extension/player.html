@@ -76,6 +76,17 @@
             <option value="10">10 s</option>
           </select>
         </label>
+        <label class="inline" title="With both overlays gone, a picture with at least this much of it the field (see 🌱 % at the bottom right) is taken for a replay, not a break">Count as the field (a replay, not a break) at
+          <select id="detect-cutoff">
+            <option value="0.2">20%</option>
+            <option value="0.25">25%</option>
+            <option value="0.3" selected>30%</option>
+            <option value="0.35">35%</option>
+            <option value="0.4">40%</option>
+            <option value="0.5">50%</option>
+          </select>
+          <span id="field-suggest" hidden></span>
+        </label>
         <div class="actions">
           <button id="detect-relearn" type="button" title="Press during normal play: the detector needs about 30 seconds of the game with the scorebug and the network logo on screen. Not during a commercial, a replay or halftime.">Learn scorebug &amp; logo</button>
         </div>
