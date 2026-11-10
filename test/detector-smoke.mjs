@@ -77,7 +77,7 @@ async function main() {
     await browser.waitForTarget((t) => t.type() === 'service_worker' && t.url().endsWith('/background.js'), { timeout: 10000 });
     const ext = [...(await browser.extensions()).values()].find((e) => e.path === extDir);
     const [sw] = await ext.workers();
-    await sw.evaluate(() => chrome.storage.local.set({ detect: { on: true, draw: true, log: true, missingS: 4 } }));
+    await sw.evaluate(() => chrome.storage.local.set({ detect: { on: true, draw: true, field: true, log: true, missingS: 4 } }));
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 720 });
     const errors = [];
@@ -120,6 +120,15 @@ async function main() {
     assert(during.boxes.some((b) => /^present: scorebug/.test(b)), 'a green box on the scorebug');
     assert(during.boxes.some((b) => /^present: logo/.test(b)), 'a green box on the logo');
 
+    // The field share, bottom right.
+    const meter = await page.evaluate(() => {
+      const m = document.getElementById('field-meter');
+      const r = m.getBoundingClientRect();
+      return { text: m.textContent, on: m.classList.contains('on'), shown: !m.hidden, right: innerWidth - r.right, bottom: innerHeight - r.bottom };
+    });
+    assert(meter.shown && /^🌱 \d+% · play \d+%$/.test(meter.text) && meter.on, `the field share shows at the bottom right ("${meter.text}", ${Math.round(meter.right)} px from the right, ${Math.round(meter.bottom)} px from the bottom)`);
+    assert(meter.right < 40 && meter.bottom < 100, 'in the bottom right corner');
+
     // The replay: both overlays gone, the field still there. Not a break.
     await at(REPLAY[1] - 1);
     const inReplay = await page.evaluate(() => ({ badge: document.getElementById('detect-state').textContent, log: document.getElementById('cue-list').textContent }));
@@ -132,6 +141,8 @@ async function main() {
     assert(/📺 COMMERCIAL/.test(breakBadge), `in the break, the log's badge says so ("${breakBadge}")`);
     const where = await page.evaluate(() => document.getElementById('cues').getBoundingClientRect().toJSON());
     assert(where.top < 100 && where.left < 100, `the ad-break log is at the top left (${Math.round(where.left)}, ${Math.round(where.top)})`);
+    const adMeter = await page.evaluate(() => ({ text: document.getElementById('field-meter').textContent, on: document.getElementById('field-meter').classList.contains('on') }));
+    assert(!adMeter.on && /^🌱 \d% /.test(adMeter.text), `in the ad, the field share drops and turns grey ("${adMeter.text}")`);
     const inBreak = await page.evaluate(() => [...document.querySelectorAll('#overlay-boxes div')].map((d) => d.className));
     assert(inBreak.length && inBreak.every((c) => c.split(' ').includes('gone')), `in the break, the boxes say gone (${inBreak.join(', ')})`);
 
@@ -163,9 +174,9 @@ async function main() {
       const box = document.getElementById('detect-on');
       box.checked = false;
       box.dispatchEvent(new Event('change'));
-      return { before, options: shown('detect-options'), learn: shown('learn-btn'), boxes: document.querySelectorAll('#overlay-boxes div').length };
+      return { before, options: shown('detect-options'), learn: shown('learn-btn'), meter: shown('field-meter'), boxes: document.querySelectorAll('#overlay-boxes div').length };
     });
-    assert(offState.before && !offState.options && !offState.learn && !offState.boxes, `turning it off hides its settings, the Learn button and the boxes (${JSON.stringify(offState)})`);
+    assert(offState.before && !offState.options && !offState.learn && !offState.meter && !offState.boxes, `turning it off hides its settings, the Learn button and the boxes (${JSON.stringify(offState)})`);
     assert(!errors.length, `no page errors (${errors.join(' | ')})`);
   } finally {
     await browser.close();

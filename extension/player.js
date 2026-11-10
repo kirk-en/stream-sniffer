@@ -1017,13 +1017,14 @@ cueLogBox.addEventListener('change', () => {
 const detectEls = {
   on: document.getElementById('detect-on'),
   draw: document.getElementById('detect-draw'),
+  field: document.getElementById('detect-field'),
   log: document.getElementById('detect-log'),
   options: document.getElementById('detect-options'),
   missing: document.getElementById('detect-missing'),
   status: document.getElementById('detect-status'),
 };
 const overlayBoxes = document.getElementById('overlay-boxes');
-let detect = { on: false, draw: false, log: false, missingS: 4 };
+let detect = { on: false, draw: false, field: false, log: false, missingS: 4 };
 let detectLast = null; // the latest result
 let detectError = '';
 const detectCost = []; // the last few samples' { grabMs, workMs }
@@ -1166,9 +1167,31 @@ function drawOverlayBoxes() {
 }
 addEventListener('resize', drawOverlayBoxes);
 
+// The field share, bottom right: 🌱 now, and in play. Green while it counts as the field.
+const fieldMeter = document.getElementById('field-meter');
+function renderFieldMeter() {
+  const r = detectLast;
+  fieldMeter.hidden = !detect.on || !detect.field;
+  if (fieldMeter.hidden) return;
+  const f = r?.field;
+  fieldMeter.classList.toggle('on', !!f?.on);
+  if (f) {
+    fieldMeter.replaceChildren(`🌱 ${Math.round(f.share * 100)}% `);
+    const base = document.createElement('span');
+    base.className = 'base';
+    base.textContent = `· play ${Math.round(f.baseline * 100)}%`;
+    fieldMeter.append(base);
+    fieldMeter.title = f.on ? 'The field is on screen' : 'Too little field: not the game (if the overlays are gone too, a break)';
+  } else {
+    fieldMeter.textContent = r?.learnLeft > 0 ? '🌱 learning…' : '🌱 —';
+    fieldMeter.title = 'The field is learned with the scorebug and logo: press Learn during a wide shot of the field';
+  }
+}
+
 function renderDetect() {
   renderDetectState();
   renderLearnBtn();
+  renderFieldMeter();
   const el = detectEls.status;
   if (!detect.on) return (el.textContent = '');
   if (detectError) return (el.textContent = `Detector: ${detectError}`);
@@ -1192,6 +1215,7 @@ function renderDetect() {
 function applyDetect() {
   detectEls.on.checked = detect.on;
   detectEls.draw.checked = detect.draw;
+  detectEls.field.checked = detect.field;
   detectEls.log.checked = detect.log;
   detectEls.options.hidden = !detect.on; // the rest only matters while it watches
   detectEls.missing.value = String(detect.missingS);
@@ -1220,6 +1244,10 @@ chrome.storage.local
 detectEls.on.addEventListener('change', () => {
   detect.on = detectEls.on.checked;
   logEvent(null, `commercial detector turned ${detect.on ? 'on' : 'off'}`);
+  saveDetect();
+});
+detectEls.field.addEventListener('change', () => {
+  detect.field = detectEls.field.checked;
   saveDetect();
 });
 detectEls.draw.addEventListener('change', () => {
