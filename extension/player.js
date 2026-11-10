@@ -257,6 +257,9 @@ async function startStream(source, slot, { retries = 0, lastReason = '', manual 
     recovered: '', // e.g. "back after 2 automatic retries (2:31:05 PM)"
     recoveredUntil: 0, // Date.now() until which that shows over the video
     firstLevel: null, // the quality of the first segment loaded (see the start level)
+    cuesSeen: new Set(), // ad-break cues already logged (see logPlaylistCues)
+    inCueBreak: false, // between a playlist's #EXT-X-CUE-OUT and #EXT-X-CUE-IN
+    cueTrackNoted: false, // whether the log says yet if segments carry a SCTE-35 track
     // Frame drops (see watchFrames): recent { at, dropped, missing }, totals, and the counts
     // the checks compare against.
     frameEvents: [],
@@ -374,6 +377,8 @@ async function startStream(source, slot, { retries = 0, lastReason = '', manual 
   // own figure is only a claim, and a playlist linked directly has none.
   hls.on(Hls.Events.FRAG_LOADED, (_e, { frag, payload }) => {
     if (frag.type !== 'main' || !(frag.duration > 0)) return;
+    // Here, not later: hls.js hands the bytes to its decoder right after this event.
+    if (cueLog) logSegmentCues(stream, frag, payload);
     stream.fragAt = performance.now();
     stream.firstLevel ??= frag.level;
     // payload is after any unwrapping (see makeLoader in shared.js), so a disguised segment
@@ -386,6 +391,7 @@ async function startStream(source, slot, { retries = 0, lastReason = '', manual 
     hls.on(e, recovered('playlist'));
   }
   hls.on(Hls.Events.LEVEL_LOADED, (_e, { details }) => {
+    if (cueLog) logPlaylistCues(stream, details);
     stream.playlistAt = performance.now();
     if (details.endSN > stream.edgeSN) {
       stream.edgeSN = details.endSN;
@@ -983,6 +989,109 @@ frameWarningsBox.addEventListener('change', () => {
   render();
   chrome.storage.local.set({ frameWarnings }).catch((err) => failPage(`Couldn't save whether frame warnings are on: ${err.message}`));
 });
+
+// Ad-break cues (SCTE-35), written to the freeze log while the menu's switch is on: the first
+// step of commercial detection is finding out which streams carry them at all. Off by default.
+// The work is small next to playback: hls.js has already parsed the playlist's tags, and a
+// segment is scanned one 188-byte packet header at a time (well under a millisecond for a few
+// MB), only while this is on.
+let cueLog = false;
+const cueLogBox = document.getElementById('cue-log');
+chrome.storage.local
+  .get('cueLog')
+  .then(({ cueLog: saved }) => {
+    cueLog = saved === true;
+    cueLogBox.checked = cueLog;
+  })
+  .catch((err) => failPage(`Couldn't read whether ad-break cues are logged: ${err.message}`));
+cueLogBox.addEventListener('change', () => {
+  cueLog = cueLogBox.checked;
+  for (const s of streams) s.cueTrackNoted = false; // say again what each stream carries
+  logEvent(null, `ad-break cue logging turned ${cueLog ? 'on' : 'off'}`);
+  chrome.storage.local.set({ cueLog }).catch((err) => failPage(`Couldn't save whether ad-break cues are logged: ${err.message}`));
+});
+
+// Playlist tags that carry or hint at ad breaks. hls.js keeps tags it doesn't use on the segment
+// they come before (frag.tagList), as [name, value]; a discontinuity is ["DIS"].
+const CUE_TAG = /CUE|SCTE|SPLICE|OATCLS|^EXT-X-DATERANGE$|^EXT-X-ASSET|^EXT-X-AD/;
+// Attributes that hold a binary cue (hex or base64): DATERANGE's SCTE35-OUT/-IN/-CMD,
+// #EXT-X-SCTE35's CUE, #EXT-X-CUE-OUT-CONT's SCTE35.
+const CUE_ATTR = /(?:^|,)\s*(SCTE35(?:-OUT|-IN|-CMD)?|CUE)=("?)([^",]+)\2/g;
+
+function seenCue(s, key) {
+  if (s.cuesSeen.has(key)) return true;
+  if (s.cuesSeen.size > 5000) s.cuesSeen.clear(); // a long game: old ones won't come back
+  s.cuesSeen.add(key);
+  return false;
+}
+// Where a playlist cue sits: its segment, and the wall-clock time the stream gives it, if any.
+function cueWhere(frag) {
+  const pdt = frag.programDateTime ? `, stream clock ${new Date(frag.programDateTime).toLocaleTimeString(undefined, { hour12: false })}` : '';
+  return `before segment ${frag.sn}${pdt}`;
+}
+
+function logPlaylistCues(s, details) {
+  for (const frag of details.fragments) {
+    for (const [name, value = ''] of frag.tagList ?? []) {
+      if (name === 'DIS') {
+        if (!seenCue(s, `dis:${frag.sn}`)) logEvent(s, `cue (playlist): discontinuity ${cueWhere(frag)}; often where an ad is stitched in or out`);
+        continue;
+      }
+      if (!CUE_TAG.test(name) || seenCue(s, `${frag.sn}:${name}:${value}`)) continue;
+      // #EXT-X-CUE-OUT-CONT repeats on every segment of a break: only the first one is news
+      // (joining mid-break).
+      if (name === 'EXT-X-CUE-OUT') s.inCueBreak = true;
+      else if (name === 'EXT-X-CUE-IN') s.inCueBreak = false;
+      else if (name === 'EXT-X-CUE-OUT-CONT') {
+        if (s.inCueBreak) continue;
+        s.inCueBreak = true;
+      }
+      const decoded = [];
+      const whole = name === 'EXT-OATCLS-SCTE35' && Scte35.fromText(value);
+      if (whole) decoded.push(Scte35.describe(whole));
+      for (const [, , , text] of value.matchAll(CUE_ATTR)) {
+        const cue = Scte35.fromText(text);
+        if (cue) decoded.push(Scte35.describe(cue));
+      }
+      const shown = value.length > 300 ? `${value.slice(0, 300)}…` : value;
+      logEvent(s, `cue (playlist): #${name}${shown ? `:${shown}` : ''} ${cueWhere(frag)}${decoded.map((d) => ` => ${d}`).join('')}`);
+    }
+  }
+}
+
+function logSegmentCues(s, frag, payload) {
+  if (!payload?.byteLength) return;
+  const bytes = new Uint8Array(payload);
+  if (bytes[0] !== 0x47) {
+    // fMP4 segments carry cues in "emsg" boxes, which aren't read yet; encrypted ones can't be
+    // read before hls.js decrypts them.
+    if (!s.cueTrackNoted) {
+      s.cueTrackNoted = true;
+      const why = frag.decryptdata?.method && frag.decryptdata.method !== 'NONE' ? 'encrypted' : 'not MPEG-TS (likely fMP4)';
+      logEvent(s, `cue (video): segments are ${why}, so cues inside the video aren't read; playlist cues still are`);
+    }
+    return;
+  }
+  let found;
+  try {
+    found = Scte35.findInTs(bytes);
+  } catch (err) {
+    console.warn('[stream-sniffer] reading SCTE-35 from a segment failed:', err);
+    return;
+  }
+  if (!s.cueTrackNoted) {
+    s.cueTrackNoted = true;
+    logEvent(s, found.pid == null
+      ? 'cue (video): segments have no SCTE-35 track'
+      : `cue (video): segments carry a SCTE-35 track (pid 0x${found.pid.toString(16)}); its cues will be logged`);
+  }
+  for (const section of found.sections) {
+    const cue = Scte35.parseSection(section);
+    // Encoders repeat a cue over several segments; once is enough.
+    if (seenCue(s, cue.hex)) continue;
+    logEvent(s, `cue (video): ${Scte35.describe(cue)} (in segment ${frag.sn})`);
+  }
+}
 
 // Over the recent segments of the quality on screen (any quality until one is on screen).
 function measuredMbps(s) {

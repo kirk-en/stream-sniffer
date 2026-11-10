@@ -40,6 +40,8 @@
   <div id="menu" hidden>
     <div id="streams"></div>
     <label class="toggle"><input id="frame-warnings" type="checkbox" checked> Warn about lost frames and refresh-rate hitches</label>
+    <!-- Ad-break markers go to the freeze log (Copy log); see logPlaylistCues in player.js. -->
+    <label class="toggle" title="Writes the stream's ad-break markers (SCTE-35 cues, in the playlist or inside the video) to the log. Read them with Copy log."><input id="cue-log" type="checkbox"> Log ad-break cues (SCTE-35)</label>
     <!-- Casting stays in view: it's what the menu is opened for most. -->
     <div id="cast">
       <p class="muted small">Cast via relay (beta)</p>
@@ -72,6 +74,7 @@
   <script src="disguise.js"></script>
   <script src="shared.js"></script>
   <script src="mirror.js"></script>
+  <script src="scte35.js"></script>
   <script src="player.js"></script>
 </body>
 </html>
