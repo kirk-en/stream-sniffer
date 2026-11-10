@@ -25,12 +25,10 @@
   const PRESENT_T = 0.35; // match score at or above: the overlay is on screen
   const ABSENT_T = 0.2; // below: it's gone (in between: as it was)
   const LEARN_S = 40; // how long learning runs after it's asked for (see relearn)
-  // The game is back when the scorebug is, matching at least this well; or, with no scorebug yet
-  // (a shot of the stadium first), when the logo alone has been back this long. A logo alone for
-  // a moment is often an ad's or a promo's.
-  const BUG_BACK_T = 0.5;
-  const LOGO_ALONE_S = 30;
-  const LOGO_ALONE_T = 0.6;
+  // The game is back when the scorebug and the logo are both back (each just on screen) for
+  // returnS, or when one of them alone matches clearly, at least this well, for returnS. A weak
+  // match on one alone (0.47, seen Nov 2026) is often some ad's graphic in that corner.
+  const CLEAR_T = 0.6;
   const BUG_GAP = 0.15; // a "logo" on the scorebug's row, this close (of the width), is part of it
   // When the detection is too shaky to trust (see health): it stops calling breaks until relearned.
   const CHECK_S = 10; // after learning, each overlay is watched this long...
@@ -527,6 +525,7 @@
       if (o.score >= PRESENT_T) o.present = true;
       else if (o.score < ABSENT_T) o.present = false;
       if (o.present !== was) o.flips.push(this.t);
+      o.clearFor = o.present && o.score >= CLEAR_T ? (o.clearFor ?? 0) + dt : 0;
       if (o.present) {
         o.goneFor = 0;
         o.backFor = was ? o.backFor + dt : dt;
@@ -614,12 +613,10 @@
         return { to: 'game', from: 'learning', reasons: [`watching the ${watched.map((o) => this.describe(o)).join(' and the ')}`] };
       }
       const allGone = watched.every((o) => !o.present);
-      // Back: the scorebug, clearly, for returnS (with whatever else is back too); or with no
-      // scorebug yet, a logo alone, clearly, for LOGO_ALONE_S.
-      const bugBack = watched.find((o) => o.kind === 'scorebug' && o.present && o.backFor >= this.options.returnS && o.score >= BUG_BACK_T);
-      const back = bugBack
-        ? [bugBack, ...watched.filter((o) => o !== bugBack && o.present)]
-        : watched.filter((o) => o.kind === 'logo' && o.present && o.backFor >= LOGO_ALONE_S && o.score >= LOGO_ALONE_T);
+      // Back (see CLEAR_T): all of them on screen for returnS, the best sign; or one, clearly.
+      const returnS = this.options.returnS;
+      const allBack = watched.every((o) => o.present && o.backFor >= returnS);
+      const back = allBack ? watched : watched.filter((o) => o.present && o.clearFor >= returnS);
       if (this.state === 'game') {
         // Every one of them gone, each for the whole time: one still on screen resets the count.
         this.goneFor = allGone ? this.goneFor + dt : 0;
@@ -637,8 +634,10 @@
       if (!back.length) return null;
       this.state = 'game';
       this.goneFor = 0;
-      const reasons = back.map((o) => `${this.describe(o)} back for ${fmt(o.backFor)} (match ${o.score.toFixed(2)})`);
-      if (!bugBack) reasons.push(`no scorebug yet, but the logo has been back ${LOGO_ALONE_S} s`);
+      const reasons = [
+        allBack ? 'both back' : `only the ${this.describe(back[0])} back, but clearly (match ${CLEAR_T} or more for ${fmt(back[0].clearFor)})`,
+        ...back.map((o) => `${this.describe(o)} back for ${fmt(o.backFor)} (match ${o.score.toFixed(2)})`),
+      ];
       const lasted = this.t - this.breakStart - back[0].backFor;
       reasons.push(`the break lasted ${fmt(lasted)}`);
       if (lasted < SHORT_BREAK_S) {
